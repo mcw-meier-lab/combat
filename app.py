@@ -279,6 +279,17 @@ def update_combat_options(combat_version,selected_batch,selected_voi,stored_data
         options = [extra_options]
     return dbc.Form(options,id="combat-version-options")
 
+@app.callback(
+        Output("download-combat-csv","data"),
+        Input("btn-download","n_clicks"),
+        Input("stored-combat","data"),
+        prevent_initial_call=True
+)
+def download_combat_table(n_clicks,stored_combat):
+    if stored_combat is None:
+        raise PreventUpdate
+    df = pd.read_json(io.StringIO(stored_combat), orient='split') 
+    return dcc.send_data_frame(df.to_csv,"combat_output.csv")
 
 @app.callback(
     Output("combat-run-output","children"),
@@ -289,6 +300,10 @@ def update_combat_table(stored_combat):
     if stored_combat is None:
         raise PreventUpdate
     df = pd.read_json(io.StringIO(stored_combat), orient='split')
+    button = html.Div([
+        dbc.Button("Download",id="btn-download",color="primary"),
+        dcc.Download(id="download-combat-csv")
+    ])
     table = html.Div([
     dash_table.DataTable(
         df.to_dict('records'), [{"name": i, "id": i} for i in df.columns],
@@ -296,7 +311,7 @@ def update_combat_table(stored_combat):
         page_size=20,
     )], style={'width':'98%'})
     
-    return table
+    return [table,button]
 
 
 @app.callback(
