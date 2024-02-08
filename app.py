@@ -1,6 +1,7 @@
 import base64
 import io
 import dash_bio
+import numpy as np
 import plotly.express as px
 import plotly.figure_factory as ff
 from rpy2.robjects.packages import importr
@@ -10,8 +11,8 @@ from formulaic import Formula
 #from scipy import stats
 from neuroHarmonize import harmonizationLearn
 from sklearn.decomposition import PCA
-#from sklearn.experimental import enable_iterative_imputer
-#from sklearn.impute import IterativeImputer
+from sklearn.experimental import enable_iterative_imputer
+from sklearn.impute import IterativeImputer
 #from sklearn.linear_model import LinearRegression
 #from statsmodels.graphics import gofplots as gof
 #import statsmodels.api as sm
@@ -28,6 +29,17 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 import pandas as pd
 import matplotlib
 matplotlib.use('agg')
+
+
+def impute_data(df):
+    is_missing = df[[col for col in df.columns
+                     if any(pd.isnull(df[col])) and not all(pd.isnull(df[col]))]]
+    imputer = IterativeImputer(missing_values=np.nan)
+    imputed = imputer.fit_transform(is_missing)
+    imputed_df = pd.DataFrame(imputed,columns=is_missing.columns)
+    merged_df = df.combine_first(imputed_df)
+
+    return merged_df
 
 app = Dash(__name__,external_stylesheets=[dbc.themes.FLATLY,dbc.icons.BOOTSTRAP],suppress_callback_exceptions=True)
 
@@ -155,6 +167,12 @@ def gen_raw_plots(selected_batch,selected_voi,stored_data):
     filtered_df = df[columns].apply(pd.to_numeric)
     filtered_df[selected_batch] = df[selected_batch]
 
+    # check for missing
+    missing_data = False
+    for col in filtered_df.columns:
+        if any(pd.isnull(filtered_df[col])) and not all(pd.isnull(filtered_df[col])):
+            missing_data = True
+
     # scatter plot
     scatter_plot = px.scatter_matrix(
         filtered_df,
@@ -168,41 +186,79 @@ def gen_raw_plots(selected_batch,selected_voi,stored_data):
     box_plot = px.box(filtered_df,color=selected_batch)
     box_plot.update_layout(title_text='Box Plots')
 
+    if missing_data:
+        imputed_df = impute_data(filtered_df)
+
     # PCA
     pca = PCA()
-    components = pca.fit_transform(filtered_df)
-    labels = {
-        str(i): f"PC {i+1} ({var:.1f}%)"
-        for i, var in enumerate(pca.explained_variance_ratio_ * 100)
-    }
+    if missing_data:
+        components = pca.fit_transform(imputed_df)
+        labels = {
+            str(i): f"PC {i+1} ({var:.1f}%)"
+            for i, var in enumerate(pca.explained_variance_ratio_ * 100)
+        }
 
-    pca_plot = px.scatter_matrix(
-        components,
-        labels=labels,
-        dimensions=range(len(selected_voi)),
-        color=filtered_df[selected_batch]
-    )
-    pca_plot.update_traces(diagonal_visible=False)
-    pca_plot.update_layout(title_text='PCA')
+        pca_plot = px.scatter_matrix(
+            components,
+            labels=labels,
+            dimensions=range(len(selected_voi)),
+            color=imputed_df[selected_batch]
+        )
+        pca_plot.update_traces(diagonal_visible=False)
+        pca_plot.update_layout(title_text='PCA (IMPUTED)')
+    else:
+        components = pca.fit_transform(filtered_df)
+        labels = {
+            str(i): f"PC {i+1} ({var:.1f}%)"
+            for i, var in enumerate(pca.explained_variance_ratio_ * 100)
+        }
+
+        pca_plot = px.scatter_matrix(
+            components,
+            labels=labels,
+            dimensions=range(len(selected_voi)),
+            color=filtered_df[selected_batch]
+        )
+        pca_plot.update_traces(diagonal_visible=False)
+        pca_plot.update_layout(title_text='PCA')
 
     # clustergram
-    cluster_plot = dash_bio.Clustergram(
-        data=filtered_df,
-        column_labels=list(filtered_df.columns),
-        row_labels=list(filtered_df[selected_batch].values),
-        height=800,
-        width=700,
-        line_width=0,
-        hidden_labels="row"
-    )
-    cluster_plot.update_layout(title_text='Clustergram')
+    if missing_data:
+        cluster_plot = dash_bio.Clustergram(
+            data=imputed_df,
+            column_labels=list(imputed_df.columns),
+            row_labels=list(imputed_df[selected_batch].values),
+            height=800,
+            width=700,
+            line_width=0,
+            hidden_labels="row"
+        )
+        cluster_plot.update_layout(title_text='Clustergram (IMPUTED)')
+    else:
+        cluster_plot = dash_bio.Clustergram(
+            data=filtered_df,
+            column_labels=list(filtered_df.columns),
+            row_labels=list(filtered_df[selected_batch].values),
+            height=800,
+            width=700,
+            line_width=0,
+            hidden_labels="row"
+        )
+        cluster_plot.update_layout(title_text='Clustergram')
 
     # distplots
-    norm_plot = ff.create_distplot([filtered_df[c] for c in columns],columns, curve_type='normal')
-    norm_plot.update_layout(title_text='Normal Distribution Plot')
+    if missing_data:
+        norm_plot = ff.create_distplot([imputed_df[c] for c in columns],columns, curve_type='normal')
+        norm_plot.update_layout(title_text='Normal Distribution Plot (IMPUTED)')
 
-    kde_plot = ff.create_distplot([filtered_df[c] for c in columns],columns)
-    kde_plot.update_layout(title_text='KDE Distribution Plot')
+        kde_plot = ff.create_distplot([imputed_df[c] for c in columns],columns)
+        kde_plot.update_layout(title_text='KDE Distribution Plot (IMPUTED)')
+    else:
+        norm_plot = ff.create_distplot([filtered_df[c] for c in columns],columns, curve_type='normal')
+        norm_plot.update_layout(title_text='Normal Distribution Plot')
+
+        kde_plot = ff.create_distplot([filtered_df[c] for c in columns],columns)
+        kde_plot.update_layout(title_text='KDE Distribution Plot')
 
     #qqplot_data = filtered_df[selected_voi].to_numpy()
     #qqplot = sm.qqplot(qqplot_data, line='45')
@@ -236,10 +292,10 @@ def update_combat_options(combat_version,selected_batch,selected_voi,stored_data
         ])
         extra_options = html.Div([
             # run without empirical bayes
-            dbc.Label("This version of Combat runs with Empirical Bayes but you can disable this option below: ",html_for="switch-disable-eb"),
-            daq.BooleanSwitch(on=False,id="switch-disable-eb"),
-            dbc.Label("Additionally, use non-parametric adjustments (default is parametric): ",html_for="switch-disable-parametric"),
-            daq.BooleanSwitch(on=False,id="switch-disable-parametric"),
+            dbc.Label("This version of Combat runs with Empirical Bayes but you can disable this option below: ",html_for="switch-eb"),
+            daq.BooleanSwitch(on=False,id="switch-eb"),
+            dbc.Label("Additionally, use non-parametric adjustments (default is parametric): ",html_for="switch-parametric"),
+            daq.BooleanSwitch(on=False,id="switch-parametric"),
             html.Div(dcc.Dropdown(id="dropdown-nonlinear"),style={"display":"none"})
         ])
         options = [alert, extra_options]
@@ -257,8 +313,8 @@ def update_combat_options(combat_version,selected_batch,selected_voi,stored_data
         ])
         extra_options = html.Div([
             # run without empirical bayes
-            dbc.Label("This version of Combat runs with Empirical Bayes but you can disable this option below: ",html_for="switch-disable-eb"),
-            daq.BooleanSwitch(on=False,id="switch-disable-eb"),
+            dbc.Label("This version of Combat runs with Empirical Bayes but you can disable this option below: ",html_for="switch-eb"),
+            daq.BooleanSwitch(on=False,id="switch-eb"),
             dbc.Label("You can also define non-linear covariates below:",
                       html_for="dropdown-nonlinear"),
             dcc.Dropdown(
@@ -266,15 +322,15 @@ def update_combat_options(combat_version,selected_batch,selected_voi,stored_data
                 id='dropdown-nonlinear',
                 placeholder="Non-linear variable(s)"
             ),
-            html.Div(daq.BooleanSwitch(id="switch-disable-parametric"),style={"display":"none"})
+            html.Div(daq.BooleanSwitch(id="switch-parametric"),style={"display":"none"})
         ])
         options = [alert,extra_options]
     elif combat_version == 3: #ENIGMA
         extra_options = html.Div([
             # run without empirical bayes
-            dbc.Label("This version of Combat runs with Empirical Bayes but you can disable this option below: ",html_for="switch-disable-eb"),
-            daq.BooleanSwitch(on=False,id="switch-disable-eb"),
-            html.Div([dcc.Dropdown(id="dropdown-nonlinear"),daq.BooleanSwitch(id="switch-disable-parametric")],style={"display":"none"})
+            dbc.Label("This version of Combat runs with Empirical Bayes but you can disable this option below: ",html_for="switch-eb"),
+            daq.BooleanSwitch(on=False,id="switch-eb"),
+            html.Div([dcc.Dropdown(id="dropdown-nonlinear"),daq.BooleanSwitch(id="switch-parametric")],style={"display":"none"})
         ])
         options = [extra_options]
     return dbc.Form(options,id="combat-version-options")
@@ -286,7 +342,7 @@ def update_combat_options(combat_version,selected_batch,selected_voi,stored_data
         prevent_initial_call=True
 )
 def download_combat_table(n_clicks,stored_combat):
-    if stored_combat is None:
+    if stored_combat is None or n_clicks == 0:
         raise PreventUpdate
     df = pd.read_json(io.StringIO(stored_combat), orient='split') 
     return dcc.send_data_frame(df.to_csv,"combat_output.csv")
@@ -301,7 +357,7 @@ def update_combat_table(stored_combat):
         raise PreventUpdate
     df = pd.read_json(io.StringIO(stored_combat), orient='split')
     button = html.Div([
-        dbc.Button("Download",id="btn-download",color="primary"),
+        dbc.Button("Download",id="btn-download",color="primary",n_clicks=0),
         dcc.Download(id="download-combat-csv")
     ])
     table = html.Div([
@@ -322,16 +378,16 @@ def update_combat_table(stored_combat):
     State('combat-model','value'),
     Input("combat-run-version","value"),
     [
-        Input("switch-disable-eb","on"),
+        Input("switch-eb","on"),
         [Input("dropdown-nonlinear","value")],
-        Input("switch-disable-parametric","on"),
+        Input("switch-parametric","on"),
     ],
     #[Input("combat-version-options","value")],
     Input('combat-run-submit','n_clicks'),
     Input("stored-data","data"),
     prevent_initial_call=True
 )
-def run_combat(selected_batch,selected_voi,combat_model,combat_version,switch_disable_eb,selected_nonlinear,switch_disable_nonparametric,n_clicks,stored_data):
+def run_combat(selected_batch,selected_voi,combat_model,combat_version,switch_eb,selected_nonlinear,switch_nonparametric,n_clicks,stored_data):
     if stored_data is None or combat_model is None or selected_batch is None \
         or selected_voi is None or combat_version is None:
         raise PreventUpdate
@@ -341,14 +397,24 @@ def run_combat(selected_batch,selected_voi,combat_model,combat_version,switch_di
 
     voi_data = df[columns].apply(pd.to_numeric)
     voi_data[selected_batch] = df[selected_batch]
+
+    # check for missing
+    missing_data = False
+    for col in voi_data.columns:
+        if any(pd.isnull(voi_data[col])) and not all(pd.isnull(voi_data[col])):
+            missing_data = True
+
     if combat_version == 1: #Fortin neuroCombat
         # run R version
         # neuroCombat(dat=t(ln_data),batch=batch)
         #with conversion.localconverter(default_converter):
+        if missing_data:
+            voi_data = impute_data(voi_data)
+
         with (ro.default_converter + pandas2ri.converter).context():
             r_dataframe = ro.conversion.get_conversion().py2rpy(voi_data[selected_voi].T)
-            r_eb = ro.BoolVector([switch_disable_eb])
-            r_parametric = ro.BoolVector([switch_disable_nonparametric])
+            r_eb = ro.BoolVector([not switch_eb])
+            r_parametric = ro.BoolVector([not switch_nonparametric])
             neuroCombat = importr('neuroCombat')
             full_combat = neuroCombat.neuroCombat(
                 r_dataframe,voi_data[selected_batch],model_matrix,eb=r_eb,parametric=r_parametric
@@ -366,14 +432,17 @@ def run_combat(selected_batch,selected_voi,combat_model,combat_version,switch_di
         # ncovar -> SITE plus whatever covariates
         # smooth_terms -> NONLINEAR covariates
         # apply model???
+        if missing_data:
+            voi_data = impute_data(voi_data)
+            
         voi_data = voi_data.rename(columns={selected_batch:"SITE"})
         ncovar = pd.DataFrame(voi_data['SITE']).apply(lambda x: x.str.replace(" ","_") if type(x) == str else x)
         model_matrix = pd.DataFrame(model_matrix)
         model_matrix['SITE'] = ncovar
         model_matrix = model_matrix.drop("Intercept",axis=1)
-        if not selected_nonlinear is None:
+        if selected_nonlinear != [None]:
             model_matrix[selected_nonlinear] = df[selected_nonlinear]
-        full_model,adjusted = harmonizationLearn(voi_data[columns].to_numpy(),model_matrix,eb=switch_disable_eb,smooth_terms=selected_nonlinear if selected_nonlinear else [])
+        full_model,adjusted = harmonizationLearn(voi_data[columns].to_numpy(),model_matrix,eb=not switch_eb,smooth_terms=selected_nonlinear if selected_nonlinear != [None] else [])
         combat_df = pd.DataFrame(adjusted)
         combat_df.columns = columns
         combat_df[selected_batch] = df[selected_batch]
@@ -387,7 +456,7 @@ def run_combat(selected_batch,selected_voi,combat_model,combat_version,switch_di
         with (ro.default_converter + pandas2ri.converter).context():
             dat_df = ro.conversion.get_conversion().py2rpy(voi_data[selected_voi])
             batch_vec = ro.FactorVector(ro.conversion.get_conversion().py2rpy(voi_data[selected_batch]))
-            r_eb = ro.BoolVector([switch_disable_eb])
+            r_eb = ro.BoolVector([not switch_eb])
             r =  ro.r
             r['source']("enigma.R")
             enigma_func = ro.globalenv['run_enigma_combat']
@@ -679,7 +748,7 @@ tab4_combat = html.Div([
                 ],
                 value=1,
                 id="combat-run-version"),
-            html.Div([html.P(id="combat-version-options"),html.Div([daq.BooleanSwitch(id="switch-disable-eb"),daq.BooleanSwitch(id="switch-disable-parametric"),dcc.Dropdown(id="dropdown-nonlinear")],style={'display':'none'})])
+            html.Div([html.P(id="combat-version-options"),html.Div([daq.BooleanSwitch(id="switch-eb"),daq.BooleanSwitch(id="switch-parametric"),dcc.Dropdown(id="dropdown-nonlinear")],style={'display':'none'})])
         ])
     ),
     html.Hr(),
