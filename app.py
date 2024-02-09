@@ -1,9 +1,11 @@
 import base64
 import io
+import json
 import dash_bio
 import numpy as np
 import plotly.express as px
 import plotly.figure_factory as ff
+import rpy2
 from rpy2.robjects.packages import importr
 from rpy2 import robjects as ro
 from rpy2.robjects import pandas2ri
@@ -16,11 +18,12 @@ from sklearn.impute import IterativeImputer
 #from sklearn.linear_model import LinearRegression
 #from statsmodels.graphics import gofplots as gof
 #import statsmodels.api as sm
-from dash import (
-    Dash, html, dcc, 
-    dash_table, Input, 
-    Output, State
-)
+#from dash import (
+#    Dash, html, dcc, 
+#    dash_table, Input, 
+#    Output, State
+#)
+from dash import dcc, dash_table, ctx
 from dash.exceptions import PreventUpdate
 import dash_bootstrap_components as dbc
 import dash_daq as daq
@@ -29,8 +32,12 @@ warnings.simplefilter(action='ignore', category=FutureWarning)
 import pandas as pd
 import matplotlib
 matplotlib.use('agg')
+import dash_mantine_components as dmc
+from dash_extensions.enrich import Output, Input, html, DashProxy, LogTransform, DashLogger, State
 
 
+
+#### Helper function for missing data
 def impute_data(df):
     is_missing = df[[col for col in df.columns
                      if any(pd.isnull(df[col])) and not all(pd.isnull(df[col]))]]
@@ -41,7 +48,10 @@ def impute_data(df):
 
     return merged_df
 
-app = Dash(__name__,external_stylesheets=[dbc.themes.FLATLY,dbc.icons.BOOTSTRAP],suppress_callback_exceptions=True)
+app = DashProxy(__name__,external_stylesheets=[dbc.themes.FLATLY,dbc.icons.BOOTSTRAP],suppress_callback_exceptions=True,transforms=[LogTransform()], prevent_initial_callbacks=True)
+#app = Dash(__name__,external_stylesheets=[dbc.themes.FLATLY,dbc.icons.BOOTSTRAP],suppress_callback_exceptions=True)
+
+
 
 @app.callback(
     Output('stored-data', 'data'),
@@ -96,6 +106,7 @@ def output_from_store(stored_data):
     )], style={'width':'98%'})
     
     return table
+
 
 @app.callback(
     Output('dropdown-voi','options'),
@@ -154,7 +165,7 @@ def get_model_matrix(stored_data,combat_model,n_clicks):
     Input('dropdown-batch','value'),
     [Input('dropdown-voi','value')],
     Input('stored-data','data'),
-    prevent_initial_call=True
+    prevent_initial_call=True,
 )
 def gen_raw_plots(selected_batch,selected_voi,stored_data):
     if stored_data == None or selected_batch == None or selected_voi == None:
@@ -266,7 +277,6 @@ def gen_raw_plots(selected_batch,selected_voi,stored_data):
     #qqplot.savefig(buf,format='png')
     #qqplot_img_data = base64.b64encode(buf.getbuffer()).decode('ascii')
     #qqplot_img = f'data:image/png;base64,{qqplot_img_data}'
-
     return scatter_plot, box_plot, pca_plot, cluster_plot, norm_plot, kde_plot, #qqplot_img
 
 ## Run Combat ##
@@ -349,13 +359,29 @@ def download_combat_table(n_clicks,stored_combat):
 
 @app.callback(
     Output("combat-run-output","children"),
+    Output("txt","children"),
     Input("stored-combat","data"),
-    prevent_initial_call=True
+    Input("combat-run-version","value"),
+    Input('combat-run-submit','n_clicks'),
+    Input("combat-stdout","data"),
+    prevent_initial_call=True,
+    log=True
 )
-def update_combat_table(stored_combat):
+def update_combat_table(stored_combat,combat_version,n_clicks,combat_stdout,dash_logger: DashLogger):
     if stored_combat is None:
         raise PreventUpdate
+    if ctx.triggered_id != "combat-run-submit":
+        raise PreventUpdate
     df = pd.read_json(io.StringIO(stored_combat), orient='split')
+    if combat_version == 1:
+        ver = "Fortin's Combat"
+    elif combat_version == 2:
+        ver = "Pomponio's Combat"
+    elif combat_version == 3:
+        ver = "ENIGMA Combat"
+    output = "".join(json.loads(combat_stdout)["Output"])
+    dash_logger.info(message=output,title=f"{ver} finished!")
+
     button = html.Div([
         dbc.Button("Download",id="btn-download",color="primary",n_clicks=0),
         dcc.Download(id="download-combat-csv")
@@ -373,6 +399,7 @@ def update_combat_table(stored_combat):
 @app.callback(
     Output("stored-combat","data"),
     Output("stored-combat-model","data"),
+    Output("combat-stdout","data"),
     Input("dropdown-batch","value"),
     [Input("dropdown-voi","value")],
     State('combat-model','value'),
@@ -382,15 +409,18 @@ def update_combat_table(stored_combat):
         [Input("dropdown-nonlinear","value")],
         Input("switch-parametric","on"),
     ],
-    #[Input("combat-version-options","value")],
     Input('combat-run-submit','n_clicks'),
     Input("stored-data","data"),
-    prevent_initial_call=True
+    prevent_initial_call=True,
+    log=True
 )
-def run_combat(selected_batch,selected_voi,combat_model,combat_version,switch_eb,selected_nonlinear,switch_nonparametric,n_clicks,stored_data):
+def run_combat(selected_batch,selected_voi,combat_model,combat_version,switch_eb,selected_nonlinear,switch_nonparametric,n_clicks,stored_data,dash_logger=DashLogger):
     if stored_data is None or combat_model is None or selected_batch is None \
         or selected_voi is None or combat_version is None:
         raise PreventUpdate
+    if ctx.triggered_id != "combat-run-submit":
+        raise PreventUpdate
+    
     df = pd.read_json(io.StringIO(stored_data), orient='split')
     model_matrix = Formula(combat_model).get_model_matrix(df)
     columns = [c for c in selected_voi]
@@ -408,17 +438,21 @@ def run_combat(selected_batch,selected_voi,combat_model,combat_version,switch_eb
         # run R version
         # neuroCombat(dat=t(ln_data),batch=batch)
         #with conversion.localconverter(default_converter):
+        buf = []
+
         if missing_data:
             voi_data = impute_data(voi_data)
-
         with (ro.default_converter + pandas2ri.converter).context():
             r_dataframe = ro.conversion.get_conversion().py2rpy(voi_data[selected_voi].T)
             r_eb = ro.BoolVector([not switch_eb])
             r_parametric = ro.BoolVector([not switch_nonparametric])
             neuroCombat = importr('neuroCombat')
+            consolewrite_print_backup = rpy2.rinterface_lib.callbacks.consolewrite_print
+            rpy2.rinterface_lib.callbacks.consolewrite_print = lambda x: buf.append(x)
             full_combat = neuroCombat.neuroCombat(
                 r_dataframe,voi_data[selected_batch],model_matrix,eb=r_eb,parametric=r_parametric
             )
+            rpy2.rinterface_lib.callbacks.consolewrite_print = consolewrite_print_backup
         combat_df = pd.DataFrame(full_combat['dat.combat']).T
         combat_df.columns = columns
         combat_df[selected_batch] = df[selected_batch]
@@ -440,20 +474,27 @@ def run_combat(selected_batch,selected_voi,combat_model,combat_version,switch_eb
         model_matrix = pd.DataFrame(model_matrix)
         model_matrix['SITE'] = ncovar
         model_matrix = model_matrix.drop("Intercept",axis=1)
-        if selected_nonlinear != [None]:
+        if not selected_nonlinear is None:
             model_matrix[selected_nonlinear] = df[selected_nonlinear]
-        full_model,adjusted = harmonizationLearn(voi_data[columns].to_numpy(),model_matrix,eb=not switch_eb,smooth_terms=selected_nonlinear if selected_nonlinear != [None] else [])
+            full_model,adjusted = harmonizationLearn(voi_data[columns].to_numpy(),model_matrix,eb=not switch_eb,smooth_terms=selected_nonlinear)
+        else:
+            full_model,adjusted = harmonizationLearn(voi_data[columns].to_numpy(),model_matrix,eb=not switch_eb)
         combat_df = pd.DataFrame(adjusted)
         combat_df.columns = columns
         combat_df[selected_batch] = df[selected_batch]
         model = pd.DataFrame(full_model['gamma_hat'])
         model['gamma_bar'] = full_model['gamma_bar']
         model['t2'] = full_model['t2']
+        buf = f"[neuroHarmonize] Ran with Empirical Bayes: {not switch_eb}\n" \
+            f"[neuroHarmonize] smooth_terms: {selected_nonlinear}"
 
 
     elif combat_version == 3: #ENIGMA Combat
+        buf = []
         # run R version
         with (ro.default_converter + pandas2ri.converter).context():
+            consolewrite_print_backup = rpy2.rinterface_lib.callbacks.consolewrite_print
+            rpy2.rinterface_lib.callbacks.consolewrite_print = lambda x: buf.append(x)
             dat_df = ro.conversion.get_conversion().py2rpy(voi_data[selected_voi])
             batch_vec = ro.FactorVector(ro.conversion.get_conversion().py2rpy(voi_data[selected_batch]))
             r_eb = ro.BoolVector([not switch_eb])
@@ -462,6 +503,7 @@ def run_combat(selected_batch,selected_voi,combat_model,combat_version,switch_eb
             enigma_func = ro.globalenv['run_enigma_combat']
             enigma_res = enigma_func(
                 dat_df,batch_vec,model_matrix,r_eb)
+            rpy2.rinterface_lib.callbacks.consolewrite_print = consolewrite_print_backup
         combat_df = pd.DataFrame(enigma_res['dat.combat'])
         combat_df.columns = columns
         combat_df[selected_batch] = df[selected_batch]
@@ -470,7 +512,8 @@ def run_combat(selected_batch,selected_voi,combat_model,combat_version,switch_eb
         model['t2'] = enigma_res['t2']
 
 
-    return combat_df.to_json(date_format='iso', orient='split'),model.to_json(date_format="iso",orient="split",default_handler=str)
+    out = {"Output":buf} # read output
+    return combat_df.to_json(date_format='iso', orient='split'),model.to_json(date_format="iso",orient="split",default_handler=str), json.dumps(out)
 
 @app.callback(
     Output('combat-prior-dist','figure'),
@@ -657,26 +700,8 @@ tab1_upload = dbc.Card(
         html.Div(id='output-data-upload'),
     ])
 )
-tab2_setup = dbc.Card(
-    dbc.CardBody([
-        html.H4("Define your variables for visualization and analysis.",
-                className="card-title"),
-        html.Hr(),
-        html.P(
-            "First, select your 'batch' or 'site' grouping variable."
-        ),
-        dcc.Dropdown(id='dropdown-batch',placeholder="Batch variable"),
-        html.Hr(),
-        html.P(
-            "Next, select your 'variables of interest.' "
-            "These are the candidate variables for adjustment in Combat."
-        ),
-        dcc.Dropdown(id='dropdown-voi',multi=True,
-                     placeholder="Variables of Interest"),
-    ])
-)
 
-tab3_plots = html.Div([
+tab2_plots = html.Div([
     dbc.Card(
         dbc.CardBody([
             # box plots
@@ -735,7 +760,27 @@ tab3_plots = html.Div([
     )
 ])
 
+tab3_compare = html.Div()
+
 tab4_combat = html.Div([
+    dbc.Card(
+        dbc.CardBody([
+            html.H4("Define your variables for visualization and analysis.",
+                className="card-title"),
+            html.Hr(),
+            html.P(
+                "First, select your 'batch' or 'site' grouping variable."
+            ),
+            dcc.Dropdown(id='dropdown-batch',placeholder="Batch variable"),
+            html.Hr(),
+            html.P(
+                "Next, select your 'variables of interest.' "
+                "These are the candidate variables for adjustment in Combat."
+            ),
+        dcc.Dropdown(id='dropdown-voi',multi=True,
+                     placeholder="Variables of Interest"),
+        ])
+    ),
     dbc.Card(
         dbc.CardBody([
             html.P(
@@ -780,17 +825,19 @@ tab4_combat = html.Div([
             html.Div(id="combat-run-output") 
         ])
     )
-
 ])
 
-tab5_compare = html.Div()
+tab5_longitudinal = html.Div()
 
 tabs = dbc.Tabs([
     dbc.Tab(tab1_upload,label="Upload"),
-    dbc.Tab(tab2_setup,label="Setup"),
-    dbc.Tab(tab3_plots,label="Plots"),
-    dbc.Tab(tab4_combat,label="Combat"),
-    dbc.Tab(tab5_compare,label="Compare Combat Versions")
+    dbc.Tab(tab2_plots,label="Plots"),
+    dbc.Tab(tab3_compare,label="Compare Combat Versions"),
+    dbc.Tab(tab4_combat,label="Cross-sectional Combat"),
+    dbc.Tab(tab5_longitudinal,label="Longitudinal Combat")
+])
+toast = html.Div([
+    dmc.Text(id="txt"),
 ])
 
 footer = html.Div(
@@ -807,12 +854,13 @@ footer = html.Div(
 app.layout = html.Div([
     header,
     steps,
-    html.Hr(),
     tabs,
+    toast,
     footer,
     dcc.Store(id="stored-data",storage_type="session"),
     dcc.Store(id="stored-combat",storage_type="memory"),
-    dcc.Store(id="stored-combat-model",storage_type="memory")
+    dcc.Store(id="stored-combat-model",storage_type="memory"),
+    dcc.Store(id="combat-stdout",storage_type="memory")
 ])
 
 if __name__ == '__main__':
