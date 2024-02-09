@@ -35,6 +35,8 @@ RUN /usr/bin/python3.9 -m pip install dash_bio \
     neuroHarmonize \
     matplotlib \
     dash_bootstrap_components \
+    dash_mantine_components \
+    dash_extensions \
     numpy \
     pandas \
     plotly==5.13.1 \
