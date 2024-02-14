@@ -72,7 +72,7 @@ def update_upload(contents, filename, list_of_dates):
     decoded = base64.b64decode(content_string)
     try:
         if 'csv' in filename:
-            df = pd.read_csv(io.StringIO(decoded.decode('utf-8')))
+            df = pd.read_csv(io.StringIO(decoded.decode('utf-8')),low_memory=False)
         elif 'xls' in filename:
             df = pd.read_excel(io.BytesIO(decoded))
         elif 'txt' in filename:
@@ -89,7 +89,8 @@ def update_upload(contents, filename, list_of_dates):
     return df.to_json(date_format='iso', orient='split')
 
 @app.callback(
-    Output('output-data-upload', 'children'),
+    Output('data-container', 'children'),
+    #Output("data-table","selected_columns"),
     Input('stored-data', 'data'),
     prevent_initial_call=True
 )
@@ -100,26 +101,38 @@ def output_from_store(stored_data):
     #table = html.Div([dbc.Table.from_dataframe(df, striped=True, bordered=True, hover=True, responsive='sm',style_table={'overflowX': 'scroll'})],style={'width':1000})
     table = html.Div([
     dash_table.DataTable(
-        df.to_dict('records'), [{"name": i, "id": i} for i in df.columns],
+        df.to_dict('records'), 
+        columns=[{"name": i, "id": i, "selectable":True} for i in df.columns],
         style_table={'overflowX': 'scroll'},
-        page_size=20,
-    )], style={'width':'98%'})
+        editable=True,
+        column_selectable="multi",
+        selected_columns=[],
+        page_size=10,
+        id="data-table"
+    )], style={'width':'98%'},id="data-container")
     
     return table
 
 
 @app.callback(
     Output('dropdown-voi','options'),
+    Output('dropdown-voi','value'),
     Input('dropdown-batch','value'),
+    Input('data-table','selected_columns'),
     Input('stored-data','data'),
+    prevent_initial_call=True
 )
-def set_setup_voi(selected_batch,stored_data):
+def set_setup_voi(selected_batch,selected_cols,stored_data):
     if stored_data is None:
         raise PreventUpdate
     df = pd.read_json(io.StringIO(stored_data), orient='split')
     voi_options = [c for c in df.columns if c != selected_batch]
+    voi_value = []
+    if selected_cols:
+        voi_value = [c for c in selected_cols if c != selected_batch]
+        voi_options = [c for c in selected_cols if c != selected_batch]
 
-    return voi_options
+    return voi_options, voi_value
 
 @app.callback(
     Output('dropdown-batch','options'),
@@ -279,7 +292,7 @@ def gen_raw_plots(selected_batch,selected_voi,stored_data):
     #qqplot_img = f'data:image/png;base64,{qqplot_img_data}'
     return scatter_plot, box_plot, pca_plot, cluster_plot, norm_plot, kde_plot, #qqplot_img
 
-## Run Combat ##
+## Run Cross-sectional Combat ##
 @app.callback(
     Output("combat-version-options","children"),
     Input("combat-run-version","value"),
@@ -303,9 +316,9 @@ def update_combat_options(combat_version,selected_batch,selected_voi,stored_data
         extra_options = html.Div([
             # run without empirical bayes
             dbc.Label("This version of Combat runs with Empirical Bayes but you can disable this option below: ",html_for="switch-eb"),
-            daq.BooleanSwitch(on=False,id="switch-eb"),
+            dmc.Switch(checked=False,id="switch-eb"),
             dbc.Label("Additionally, use non-parametric adjustments (default is parametric): ",html_for="switch-parametric"),
-            daq.BooleanSwitch(on=False,id="switch-parametric"),
+            dmc.Switch(checked=False,id="switch-parametric"),
             html.Div(dcc.Dropdown(id="dropdown-nonlinear"),style={"display":"none"})
         ])
         options = [alert, extra_options]
@@ -324,7 +337,7 @@ def update_combat_options(combat_version,selected_batch,selected_voi,stored_data
         extra_options = html.Div([
             # run without empirical bayes
             dbc.Label("This version of Combat runs with Empirical Bayes but you can disable this option below: ",html_for="switch-eb"),
-            daq.BooleanSwitch(on=False,id="switch-eb"),
+            dmc.Switch(checked=False,id="switch-eb"),
             dbc.Label("You can also define non-linear covariates below:",
                       html_for="dropdown-nonlinear"),
             dcc.Dropdown(
@@ -332,15 +345,15 @@ def update_combat_options(combat_version,selected_batch,selected_voi,stored_data
                 id='dropdown-nonlinear',
                 placeholder="Non-linear variable(s)"
             ),
-            html.Div(daq.BooleanSwitch(id="switch-parametric"),style={"display":"none"})
+            html.Div(dmc.Switch(id="switch-parametric"),style={"display":"none"})
         ])
         options = [alert,extra_options]
     elif combat_version == 3: #ENIGMA
         extra_options = html.Div([
             # run without empirical bayes
             dbc.Label("This version of Combat runs with Empirical Bayes but you can disable this option below: ",html_for="switch-eb"),
-            daq.BooleanSwitch(on=False,id="switch-eb"),
-            html.Div([dcc.Dropdown(id="dropdown-nonlinear"),daq.BooleanSwitch(id="switch-parametric")],style={"display":"none"})
+            dmc.Switch(checked=False,id="switch-eb"),
+            html.Div([dcc.Dropdown(id="dropdown-nonlinear"),dmc.Switch(id="switch-parametric")],style={"display":"none"})
         ])
         options = [extra_options]
     return dbc.Form(options,id="combat-version-options")
@@ -434,6 +447,17 @@ def run_combat(selected_batch,selected_voi,combat_model,combat_version,switch_eb
         if any(pd.isnull(voi_data[col])) and not all(pd.isnull(voi_data[col])):
             missing_data = True
 
+    # check for factored vars
+    use_factor = False
+    factor_vars = []
+    for c in selected_voi:
+        if c.lower() == "sex" or "sex" in c.lower():
+           factor_var = pd.get_dummies(df[c],dtype=float)
+           df[f"{c}_factor"] = factor_var
+           use_factor = True
+           factor_vars.append(c)
+
+
     if combat_version == 1: #Fortin neuroCombat
         # run R version
         # neuroCombat(dat=t(ln_data),batch=batch)
@@ -468,6 +492,9 @@ def run_combat(selected_batch,selected_voi,combat_model,combat_version,switch_eb
         # apply model???
         if missing_data:
             voi_data = impute_data(voi_data)
+        if use_factor:
+            for var in factor_vars:
+                voi_data[var.replace("_","")] = df[var]
             
         voi_data = voi_data.rename(columns={selected_batch:"SITE"})
         ncovar = pd.DataFrame(voi_data['SITE']).apply(lambda x: x.str.replace(" ","_") if type(x) == str else x)
@@ -614,6 +641,196 @@ def gen_combat_plots(selected_batch,selected_voi,combat_data,combat_version):
 
     return scatter_plot, box_plot, pca_plot, cluster_plot, norm_plot, kde_plot, #qqplot_img
 
+## Run Longitudinal Combat ##
+@app.callback(
+    Output('dropdown-long-voi','options'),
+    Input('dropdown-long-batch','value'),
+    Input('dropdown-long-idvar','value'),
+    Input('dropdown-long-timevar','value'),
+    Input('stored-data','data'),
+)
+def set_long_voi(selected_batch,selected_idvar,selected_timevar,stored_data):
+    if stored_data is None:
+        raise PreventUpdate
+    df = pd.read_json(io.StringIO(stored_data), orient='split')
+    voi_options = [c for c in df.columns if c != selected_batch and \
+                   c != selected_idvar and c != selected_timevar]
+
+    return voi_options
+
+@app.callback(
+    Output('dropdown-long-batch','options'),
+    Input('dropdown-long-idvar','value'),
+    Input('dropdown-long-timevar','value'),
+    Input('stored-data','data'),
+)
+def set_long_batch(selected_idvar,selected_timevar,stored_data):
+    if stored_data is None:
+        raise PreventUpdate
+    df = pd.read_json(io.StringIO(stored_data), orient='split')
+    batch_options = [c for c in df.columns if c != selected_idvar and \
+                     c != selected_timevar]
+
+    return batch_options
+
+@app.callback(
+    Output('dropdown-long-idvar','options'),
+    Input('stored-data','data')
+)
+def set_long_idvar(stored_data):
+    if stored_data is None:
+        raise PreventUpdate
+    df = pd.read_json(io.StringIO(stored_data),orient="split")
+    idvar_options = [c for c in df.columns]
+
+    return idvar_options
+
+@app.callback(
+    Output('dropdown-long-timevar','options'),
+    Input('dropdown-long-idvar','value'),
+    Input('stored-data','data')
+)
+def set_long_timevar(selected_idvar,stored_data):
+    if stored_data is None:
+        raise PreventUpdate
+    df = pd.read_json(io.StringIO(stored_data),orient="split")
+    timevar_options = [c for c in df.columns if c != selected_idvar]
+
+    return timevar_options
+
+@app.callback(
+    Output('long-combat-model-output','children'),
+    Input('stored-data','data'),
+    State('long-combat-model','value'),
+    Input('long-combat-model-submit','n_clicks'),
+    prevent_initial_call=True
+)
+def get_long_model_matrix(stored_data,combat_model,n_clicks):
+    if stored_data is None or combat_model is None:
+        raise PreventUpdate
+    df = pd.read_json(io.StringIO(stored_data), orient='split')
+    X = Formula(combat_model).get_model_matrix(df)
+    table = html.Div([
+    dash_table.DataTable(
+        X.to_dict('records'), [{"name": i, "id": i} for i in X.columns],
+        style_table={'overflowX': 'scroll'},
+        page_size=5,
+    )], style={'width':'98%'}) 
+
+    return table
+
+@app.callback(
+        Output("download-long-combat-csv","data"),
+        Input("btn-long-download","n_clicks"),
+        Input("stored-long-combat","data"),
+        prevent_initial_call=True
+)
+def download_long_combat_table(n_clicks,stored_combat):
+    if stored_combat is None or n_clicks == 0:
+        raise PreventUpdate
+    df = pd.read_json(io.StringIO(stored_combat), orient='split') 
+    return dcc.send_data_frame(df.to_csv,"longitudinal_combat_output.csv")
+
+@app.callback(
+    Output("long-combat-run-output","children"),
+    Output("txt","children"),
+    Input("stored-long-combat","data"),
+    Input('long-combat-run-submit','n_clicks'),
+    Input("long-combat-stdout","data"),
+    prevent_initial_call=True,
+    log=True
+)
+def update_long_combat_table(stored_combat,n_clicks,combat_stdout,dash_logger: DashLogger):
+    if stored_combat is None:
+        raise PreventUpdate
+    if ctx.triggered_id != "combat-run-submit":
+        raise PreventUpdate
+    df = pd.read_json(io.StringIO(stored_combat), orient='split')
+    output = "".join(json.loads(combat_stdout)["Output"])
+    dash_logger.info(message=output,title=f"Longitudinal Combat finished!")
+
+    button = html.Div([
+        dbc.Button("Download",id="btn-long-download",color="primary",n_clicks=0),
+        dcc.Download(id="download-long-combat-csv")
+    ])
+    table = html.Div([
+    dash_table.DataTable(
+        df.to_dict('records'), [{"name": i, "id": i} for i in df.columns],
+        style_table={'overflowX': 'scroll'},
+        page_size=20,
+    )], style={'width':'98%'})
+    
+    return [table,button]
+
+
+@app.callback(
+    Output("stored-long-combat","data"),
+    Output("long-combat-stdout","data"),
+    Input('dropdown-long-idvar','value'),
+    Input('dropdown-long-timevar','value'),
+    Input("dropdown-long-batch","value"),
+    [Input("dropdown-long-voi","value")],
+    State('long-combat-model','value'),
+    State('long-combat-ranef','value'),
+    Input('long-combat-run-submit','n_clicks'),
+    Input("stored-data","data"),
+    prevent_initial_call=True,
+    log=True
+)
+def run_long_combat(selected_idvar,selected_timevar,selected_batch,selected_voi,combat_model,combat_ranef,n_clicks,stored_data,dash_logger=DashLogger):
+    if stored_data is None or combat_model is None or selected_batch is None \
+        or selected_voi is None or combat_ranef is None \
+            or selected_idvar is None or selected_timevar is None:
+        raise PreventUpdate
+    if ctx.triggered_id != "long-combat-run-submit":
+        raise PreventUpdate
+    
+    df = pd.read_json(io.StringIO(stored_data), orient='split')
+    columns = [c for c in selected_voi]
+
+    voi_data = df[columns].apply(pd.to_numeric)
+    voi_data[selected_batch] = df[selected_batch]
+
+    # check for missing
+    missing_data = False
+    for col in voi_data.columns:
+        if any(pd.isnull(voi_data[col])) and not all(pd.isnull(voi_data[col])):
+            missing_data = True
+
+    # check for factored vars
+    use_factor = False
+    factor_vars = []
+    for c in selected_voi:
+        if c.lower() == "sex" or "sex" in c.lower():
+           factor_var = pd.get_dummies(df[c],dtype=float)
+           df[f"{c}_factor"] = factor_var
+           use_factor = True
+           factor_vars.append(c)
+
+    buf = []
+
+    if missing_data:
+        voi_data = impute_data(voi_data)
+    with (ro.default_converter + pandas2ri.converter).context():
+        r_dataframe = ro.conversion.get_conversion().py2rpy(voi_data[selected_voi])
+        longCombat = importr('longCombat')
+        consolewrite_print_backup = rpy2.rinterface_lib.callbacks.consolewrite_print
+        rpy2.rinterface_lib.callbacks.consolewrite_print = lambda x: buf.append(x)
+        full_combat = longCombat.longCombat(
+            idvar=selected_idvar,
+            timevar=selected_timevar,
+            batchvar=selected_batch,
+            features=selected_voi,
+            formula=combat_model,
+            ranef=combat_ranef,
+            data=r_dataframe
+        )
+        rpy2.rinterface_lib.callbacks.consolewrite_print = consolewrite_print_backup
+    combat_df = pd.DataFrame(full_combat['data_combat'])
+
+    out = {"Output":buf} # read output
+
+    return combat_df.to_json(date_format='iso', orient='split'), json.dumps(out)
 
 ## Pages/Tab Layouts ##
 header = html.Div(
@@ -686,20 +903,7 @@ steps = html.Div(
         title="Step 3")
     ], start_collapsed=True)
 )
-tab1_upload = dbc.Card(
-    dbc.CardBody([
-        html.H4("Upload Data", className="card-title"),
-        html.P(
-            "Choose some text data to upload and analyze."
-             " Preferrably CSV data.",
-             className="card-text"
-        ),
-        dcc.Upload(dbc.Button('Upload File',color="primary",class_name="me-1"),
-               id='upload-data'),
-        html.Hr(),
-        html.Div(id='output-data-upload'),
-    ])
-)
+
 
 tab2_plots = html.Div([
     dbc.Card(
@@ -765,6 +969,20 @@ tab3_compare = html.Div()
 tab4_combat = html.Div([
     dbc.Card(
         dbc.CardBody([
+            html.H4("Upload Data", className="card-title"),
+            html.P(
+                "Choose some text data to upload and analyze."
+                " Preferrably CSV data.",
+                className="card-text"
+            ),
+            dcc.Upload(dbc.Button('Upload File',color="primary",class_name="me-1"),
+               id='upload-data'),
+            html.Hr(),
+            html.Div(dash_table.DataTable(id='data-table'),id="data-container")
+        ])
+    ),
+    dbc.Card(
+        dbc.CardBody([
             html.H4("Define your variables for visualization and analysis.",
                 className="card-title"),
             html.Hr(),
@@ -783,8 +1001,8 @@ tab4_combat = html.Div([
     ),
     dbc.Card(
         dbc.CardBody([
-            html.P(
-                "Choose your Combat version:"
+            html.H4(
+                "Choose your Combat version:",className="card-title"
             ),
             dbc.RadioItems(options=[
                 {"label":"Fortin's neuroCombat","value":1},
@@ -793,14 +1011,15 @@ tab4_combat = html.Div([
                 ],
                 value=1,
                 id="combat-run-version"),
-            html.Div([html.P(id="combat-version-options"),html.Div([daq.BooleanSwitch(id="switch-eb"),daq.BooleanSwitch(id="switch-parametric"),dcc.Dropdown(id="dropdown-nonlinear")],style={'display':'none'})])
+            html.Div([html.P(id="combat-version-options"),html.Div([dmc.Switch(id="switch-eb"),dmc.Switch(id="switch-parametric"),dcc.Dropdown(id="dropdown-nonlinear")],style={'display':'none'})])
         ])
     ),
     html.Hr(),
     dbc.Card(
         dbc.CardBody([
-            html.P(
-                "Define the statistical model you'd like to use:"
+            html.H4(
+                "Define the statistical model you'd like to use:",
+                className="card-title"
             ),
             dbc.Input(id="combat-model", placeholder="~x+y", type="text"),
             html.P(),
@@ -827,10 +1046,76 @@ tab4_combat = html.Div([
     )
 ])
 
-tab5_longitudinal = html.Div()
+tab5_longitudinal = html.Div([
+    dbc.Card(
+        dbc.CardBody([
+            html.H4("Define your variables for visualization and analysis.",
+                className="card-title"),
+            html.Hr(),
+            html.P(
+                "Select the unique ID variable."
+            ),
+            dcc.Dropdown(id="dropdown-long-idvar",placeholder="ID variable"),
+            html.Hr(),
+            html.P(
+                "Select the time variable."
+            ),
+            dcc.Dropdown(id='dropdown-long-timevar',placeholder="Time variable"),
+            html.Hr(),
+            html.P(
+                "Select your 'batch' or 'site' grouping variable."
+            ),
+            dcc.Dropdown(id='dropdown-long-batch',placeholder="Batch variable"),
+            html.Hr(),
+            html.P(
+                "Next, select your 'variables of interest.' "
+                "These are the candidate variables for adjustment in Combat."
+            ),
+        dcc.Dropdown(id='dropdown-long-voi',multi=True,
+                     placeholder="Variables of Interest"),
+        ])
+    ),
+    html.Hr(),
+    dbc.Card(
+        dbc.CardBody([
+            html.P(
+                "Define the random effects"
+            ),
+            dbc.Input(id="long-combat-ranef",placeholder="~(1|SubID)",type="text"),
+        ])
+    ),
+    html.Hr(),
+    dbc.Card(
+        dbc.CardBody([
+            html.P(
+                "Define the statistical model you'd like to use:"
+            ),
+            dbc.Input(id="long-combat-model", placeholder="~x+y", type="text"),
+            html.P(),
+            html.Div([
+                dbc.Button("Get Model Matrix",id="long-combat-model-submit",n_clicks=0,className="me-md-2",),
+            ],className="d-grid gap-2 col-6 mx-auto"),
+            html.Div(id='long-combat-model-output')
+        ])
+    ),
+    html.Hr(),
+    dbc.Card(
+        dbc.CardBody([
+            html.P(
+                "Click the 'submit' button to run Combat on your data. "
+                "Upon completion, you can return to the 'Plots' tab to "
+                "visualize your results in comparison to the raw data."
+            ),
+            html.Div([
+                dbc.Button("Submit",id="long-combat-run-submit",n_clicks=0,className="me-md-2"),
+            ],className="d-grid gap-2 col-6 mx-auto"),
+            html.Hr(),
+            html.Div(id="long-combat-run-output") 
+        ])
+    )
+])
 
 tabs = dbc.Tabs([
-    dbc.Tab(tab1_upload,label="Upload"),
     dbc.Tab(tab2_plots,label="Plots"),
     dbc.Tab(tab3_compare,label="Compare Combat Versions"),
     dbc.Tab(tab4_combat,label="Cross-sectional Combat"),
@@ -860,7 +1145,10 @@ app.layout = html.Div([
     dcc.Store(id="stored-data",storage_type="session"),
     dcc.Store(id="stored-combat",storage_type="memory"),
     dcc.Store(id="stored-combat-model",storage_type="memory"),
-    dcc.Store(id="combat-stdout",storage_type="memory")
+    dcc.Store(id="combat-stdout",storage_type="memory"),
+    dcc.Store(id="stored-long-combat",storage_type="memory"),
+    dcc.Store(id="stored-long-model",storage_type="memory"),
+    dcc.Store(id="long-combat-stdout",storage_type="memory"),
 ])
 
 if __name__ == '__main__':
