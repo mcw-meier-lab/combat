@@ -14,11 +14,6 @@ app = DashProxy(__name__,external_stylesheets=[dbc.themes.FLATLY,dbc.icons.BOOTS
 navbar = dbc.NavbarSimple(
        children=[
         dbc.NavItem(dbc.NavLink(
-            "Compare Combat",
-            href=dash.page_registry['pages.comparison']['path'],
-            class_name="text-white"
-        )),
-        dbc.NavItem(dbc.NavLink(
             "Cross-Sectional",
             href=dash.page_registry['pages.cross_sectional']['path'],
             class_name="text-white"
