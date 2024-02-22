@@ -524,53 +524,6 @@ def gen_raw_plots(selected_batch,selected_voi,stored_data):
     return scatter_plot, box_plot, pca_plot, cluster_plot, norm_plot, kde_plot, #qqplot_img
 
 @callback(
-        Output("download-combat-plots","data"),
-        Input("btn-download-plots","n_clicks"),
-        Input("raw-scatter","figure"),
-        Input("raw-box","figure"),
-        Input("raw-pca","figure"),
-        Input("raw-clustergram","figure"),
-        Input("raw-distplot-norm","figure"),
-        Input("raw-distplot-kde","figure"),
-        Input("combat-scatter","figure"),
-        Input("combat-box","figure"),
-        Input("combat-pca","figure"),
-        Input("combat-clustergram","figure"),
-        Input("combat-distplot-norm","figure"),
-        Input("combat-distplot-kde","figure"),
-        prevent_initial_call=True
-)
-def download_combat_plots(n_clicks,raw_scatter, raw_box, raw_pca, \
-                          raw_clustergram, raw_norm, raw_kde, \
-                            scatter,box,pca,clustergram,norm_dist,kde_dist):
-    if scatter is None or n_clicks == 0:
-        raise PreventUpdate
-
-    figs = [go.Figure(raw_scatter),go.Figure(scatter),
-            go.Figure(raw_box),go.Figure(box),
-            go.Figure(raw_pca),go.Figure(pca),
-            go.Figure(raw_clustergram),go.Figure(clustergram),
-            go.Figure(raw_norm),go.Figure(norm_dist),
-            go.Figure(raw_kde),go.Figure(kde_dist)
-            ]
-    main_buffer = io.StringIO()
-    outputs = []
-    _buffer = io.StringIO()
-    figs[0].write_html(_buffer, full_html=True, include_plotlyjs='cdn')
-    outputs.append(_buffer)
-    for fig in figs[1:]:
-        _buffer = io.StringIO()
-        fig.write_html(_buffer, full_html=False)
-        outputs.append(_buffer)
-
-    main_buffer.write(''.join([i.getvalue() for i in outputs]))
-    html_bytes = main_buffer.getvalue().encode()
-    encoded = base64.b64encode(html_bytes).decode()
-
-    return dcc.send_file("data:text/html;base64," + encoded,"combat_plot_report.html")
-
-@callback(
-    Output("plot-btn-container","children"),
     Output('combat-scatter','figure'),
     Output('combat-box','figure'),
     Output('combat-pca','figure'),
@@ -657,16 +610,7 @@ def gen_combat_plots(selected_batch,selected_voi,combat_data,combat_version):
     #qqplot_img = f'data:image/png;base64,{qqplot_img_data}'
 
 
-    button = html.Div([
-        dbc.Button("Download Plot Report",
-                   id="btn-download-plots",
-                   color="primary",n_clicks=0,
-                   className="me-md-2"),
-        dcc.Download(id="download-combat-plots"),
-        html.Hr()
-    ], id="plot-btn-container",className="d-grid gap-2 col-6 mx-auto")
-
-    return button,scatter_plot, box_plot, pca_plot, cluster_plot, norm_plot, kde_plot, #qqplot_img
+    return scatter_plot, box_plot, pca_plot, cluster_plot, norm_plot, kde_plot, #qqplot_img
 
 @callback(
     Output('combat-prior-dist','figure'),
