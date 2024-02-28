@@ -209,7 +209,7 @@ def update_long_combat_table(stored_combat,n_clicks,combat_stdout,dash_logger: D
     dash_logger.info(message=output,title=f"Longitudinal Combat finished!",style={"overflow":"scroll"})
 
     button = html.Div([
-        dbc.Button("Download",id="btn-long-download",color="primary",n_clicks=0),
+        dbc.Button("Download Adjusted Data",id="btn-long-download",color="primary",n_clicks=0),
         dcc.Download(id="download-long-combat-csv"),
         html.Hr()
     ],id="long-download-btn-container",className="d-grid gap-2 col-6 mx-auto")

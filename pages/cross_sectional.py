@@ -401,25 +401,19 @@ def run_combat(selected_batch,selected_voi,combat_model,combat_version,switch_eb
     return combat_df.to_json(date_format='iso', orient='split'),model.to_json(date_format="iso",orient="split",default_handler=str), json.dumps(out)
 
 @callback(
-    Output('raw-scatter','figure'),
-    Output('raw-box','figure'),
-    Output('raw-pca','figure'),
-    Output('raw-clustergram','figure'),
-    Output('raw-distplot-norm','figure'),
-    Output('raw-distplot-kde','figure'),
-    Input('dropdown-batch','value'),
-    [Input('dropdown-voi','value')],
-    Input('stored-data','data'),
+    Output("plots","children"),
+    Input("dropdown-batch","value"),
+    [Input("dropdown-voi","value")],
+    Input("stored-data","data"),
+    Input("combat-run-version","value"),
+    Input("stored-combat","data")
 )
-def gen_raw_plots(selected_batch,selected_voi,stored_data):
-    if stored_data == None or selected_batch == None or selected_voi == None:
+def gen_plots(selected_batch,selected_voi,stored_data,combat_version,combat_data):
+    if selected_batch is None or selected_voi is None or stored_data is None:
         raise PreventUpdate
     
-    # prep
     df = pd.read_json(io.StringIO(stored_data), orient='split')
-    columns = [c for c in selected_voi]
-    #columns.append(selected_batch)
-    filtered_df = df[columns].apply(pd.to_numeric)
+    filtered_df = df[selected_voi].apply(pd.to_numeric)
     filtered_df[selected_batch] = df[selected_batch]
 
     # check for missing
@@ -503,126 +497,139 @@ def gen_raw_plots(selected_batch,selected_voi,stored_data):
 
     # distplots
     if missing_data:
-        norm_plot = ff.create_distplot([imputed_df[c] for c in columns],columns, curve_type='normal')
+        norm_plot = ff.create_distplot([imputed_df[c] for c in selected_voi],selected_voi, curve_type='normal')
         norm_plot.update_layout(title_text='Normal Distribution Plot (IMPUTED)')
 
-        kde_plot = ff.create_distplot([imputed_df[c] for c in columns],columns)
+        kde_plot = ff.create_distplot([imputed_df[c] for c in selected_voi],selected_voi)
         kde_plot.update_layout(title_text='KDE Distribution Plot (IMPUTED)')
     else:
-        norm_plot = ff.create_distplot([filtered_df[c] for c in columns],columns, curve_type='normal')
+        norm_plot = ff.create_distplot([filtered_df[c] for c in selected_voi],selected_voi, curve_type='normal')
         norm_plot.update_layout(title_text='Normal Distribution Plot')
 
-        kde_plot = ff.create_distplot([filtered_df[c] for c in columns],columns)
+        kde_plot = ff.create_distplot([filtered_df[c] for c in selected_voi],selected_voi)
         kde_plot.update_layout(title_text='KDE Distribution Plot')
 
-    #qqplot_data = filtered_df[selected_voi].to_numpy()
-    #qqplot = sm.qqplot(qqplot_data, line='45')
-    #buf = io.BytesIO()
-    #qqplot.savefig(buf,format='png')
-    #qqplot_img_data = base64.b64encode(buf.getbuffer()).decode('ascii')
-    #qqplot_img = f'data:image/png;base64,{qqplot_img_data}'
-    return scatter_plot, box_plot, pca_plot, cluster_plot, norm_plot, kde_plot, #qqplot_img
+    # Combat plots
+    if not combat_data:
+        ver = ""
+        combat_box = go.Figure()
+        combat_scatter = go.Figure()
+        combat_pca = go.Figure()
+        combat_cluster = go.Figure()
+        combat_norm = go.Figure()
+        combat_kde = go.Figure()
+    else:
+        combat_df = pd.read_json(io.StringIO(combat_data), orient='split')
+        combat_df.columns = selected_voi + [selected_batch]
 
-@callback(
-    Output('combat-scatter','figure'),
-    Output('combat-box','figure'),
-    Output('combat-pca','figure'),
-    Output('combat-clustergram','figure'),
-    Output('combat-distplot-norm','figure'),
-    Output('combat-distplot-kde','figure'),
-    Input('dropdown-batch','value'),
-    [Input('dropdown-voi','value')],
-    Input('stored-combat','data'),
-    Input("combat-run-version","value"),
-    prevent_initial_call=True 
-)
-def gen_combat_plots(selected_batch,selected_voi,combat_data,combat_version):
-    if combat_data is None or selected_batch is None or selected_voi is None:
-        raise PreventUpdate
+        if combat_version == 1:
+            ver="Fortin"
+        elif combat_version == 2:
+            ver="Pomponio"
+        elif combat_version == 3:
+            ver="ENIGMA"
     
-    # prep
-    full_df = pd.read_json(io.StringIO(combat_data), orient='split')
-    columns = [c for c in selected_voi]
-    columns.append(selected_batch)
-    full_df.columns = columns
+        combat_box = px.box(combat_df,color=selected_batch)
+        combat_box.update_layout(title_text=f'{ver} Combat Adjusted Box Plots')
 
-    if combat_version == 1:
-        ver="Fortin"
-    elif combat_version == 2:
-        ver="Pomponio"
-    elif combat_version == 3:
-        ver="ENIGMA"
-    
-    # scatter plot
-    scatter_plot = px.scatter_matrix(
-        full_df,
-        dimensions=selected_voi,
-        color=selected_batch
-    )
-    scatter_plot.update_traces(diagonal_visible=False)
-    scatter_plot.update_layout(title_text=f'{ver} Combat Adjusted Scatter Plot')
+        combat_scatter = px.scatter_matrix(
+            combat_df,
+            dimensions=selected_voi,
+            color=selected_batch
+        )
+        combat_scatter.update_traces(diagonal_visible=False)
+        combat_scatter.update_layout(title_text=f'{ver} Combat Adjusted Scatter Plot')
 
-    # box plot
-    box_plot = px.box(full_df,color=selected_batch)
-    box_plot.update_layout(title_text=f'{ver} Combat Adjusted Box Plots')
+        components = pca.fit_transform(combat_df[selected_voi])
+        labels = {
+            str(i): f"PC {i+1} ({var:.1f}%)"
+            for i, var in enumerate(pca.explained_variance_ratio_ * 100)
+        }
 
-    # PCA
-    pca = PCA()
-    components = pca.fit_transform(full_df[selected_voi])
-    labels = {
-        str(i): f"PC {i+1} ({var:.1f}%)"
-        for i, var in enumerate(pca.explained_variance_ratio_ * 100)
-    }
+        combat_pca = px.scatter_matrix(
+            components,
+            labels=labels,
+            dimensions=range(len(selected_voi)),
+            color=combat_df[selected_batch]
+        )
+        combat_pca.update_traces(diagonal_visible=False)
+        combat_pca.update_layout(title_text=f'{ver} Combat Adjusted PCA')
 
-    pca_plot = px.scatter_matrix(
-        components,
-        labels=labels,
-        dimensions=range(len(selected_voi)),
-        color=full_df[selected_batch]
-    )
-    pca_plot.update_traces(diagonal_visible=False)
-    pca_plot.update_layout(title_text=f'{ver} Combat Adjusted PCA')
+        combat_cluster = dash_bio.Clustergram(
+            data=combat_df,
+            column_labels=list(combat_df.columns),
+            row_labels=list(combat_df[selected_batch].values),
+            height=800,
+            width=700,
+            line_width=0,
+            hidden_labels="row"
+        )
+        combat_cluster.update_layout(title_text=f'{ver} Combat Adjusted Clustergram')
 
-    # clustergram
-    cluster_plot = dash_bio.Clustergram(
-        data=full_df,
-        column_labels=list(full_df.columns),
-        row_labels=list(full_df[selected_batch].values),
-        height=800,
-        width=700,
-        line_width=0,
-        hidden_labels="row"
-    )
-    cluster_plot.update_layout(title_text=f'{ver} Combat Adjusted Clustergram')
+        combat_norm = ff.create_distplot([combat_df[c] for c in selected_voi],selected_voi, curve_type='normal')
+        combat_norm.update_layout(title_text=f'{ver} Combat Adjusted Normal Distribution Plot')
 
-    # distplots
-    norm_plot = ff.create_distplot([full_df[c] for c in selected_voi],selected_voi, curve_type='normal')
-    norm_plot.update_layout(title_text=f'{ver} Combat Adjusted Normal Distribution Plot')
+        combat_kde = ff.create_distplot([combat_df[c] for c in selected_voi],selected_voi)
+        combat_kde.update_layout(title_text=f'{ver} Combat Adjusted KDE Distribution Plot')
 
-    kde_plot = ff.create_distplot([full_df[c] for c in selected_voi],selected_voi)
-    kde_plot.update_layout(title_text=f'{ver} Combat Adjusted KDE Distribution Plot')
+    plots = html.Div([
+        html.P(),
+        dbc.Card(
+            dbc.CardBody([
+                dbc.Row([
+                    dbc.Col(dcc.Graph(figure=box_plot)),
+                    dbc.Col(dcc.Graph(figure=combat_box))
+                ])
+            ])
+        ),
+        html.Hr(),
+        dbc.Card(
+            dbc.CardBody([
+                dbc.Row([
+                    dbc.Col(dcc.Graph(figure=scatter_plot)),
+                    dbc.Col(dcc.Graph(figure=combat_scatter))
+                ])
+            ])
+        ),
+        html.Hr(),
+        dbc.Card(
+            dbc.CardBody([
+                dbc.Row([
+                    dbc.Col(dcc.Graph(figure=pca_plot)),
+                    dbc.Col(dcc.Graph(figure=combat_pca))
+                ])
+            ])
+        ),
+        html.Hr(),
+        dbc.Card(
+            dbc.CardBody([
+                dbc.Row([
+                    dbc.Col(dcc.Graph(figure=cluster_plot)),
+                    dbc.Col(dcc.Graph(figure=combat_cluster))
+                ])
+            ])
+        ),
+        html.Hr(),
+        dbc.Card(
+            dbc.CardBody([
+                dbc.Row([
+                    dbc.Col(dcc.Graph(figure=norm_plot)),
+                    dbc.Col(dcc.Graph(figure=combat_norm))
+                ])
+            ])
+        ),
+        html.Hr(),
+        dbc.Card(
+            dbc.CardBody([
+                dbc.Row([
+                    dbc.Col(dcc.Graph(figure=kde_plot)),
+                    dbc.Col(dcc.Graph(figure=combat_kde))
+                ])
+            ])
+        )
+    ])
 
-    #qqplot_data = filtered_df[selected_voi].to_numpy()
-    #qqplot = sm.qqplot(qqplot_data, line='45')
-    #buf = io.BytesIO()
-    #qqplot.savefig(buf,format='png')
-    #qqplot_img_data = base64.b64encode(buf.getbuffer()).decode('ascii')
-    #qqplot_img = f'data:image/png;base64,{qqplot_img_data}'
-
-
-    return scatter_plot, box_plot, pca_plot, cluster_plot, norm_plot, kde_plot, #qqplot_img
-
-@callback(
-    Output('combat-prior-dist','figure'),
-    Input('stored-combat-model','data'),
-    prevent_initial_call=True
-)
-def update_combat_priors(combat_model):
-    pass
-
-
-
-
+    return plots
 
 layout = html.Div([
     html.P(),
@@ -706,83 +713,23 @@ layout = html.Div([
                         ),
                         html.Div([
                             dbc.Button("Submit",id="combat-run-submit",n_clicks=0,className="me-md-2"),
-                            html.Div(id="btn-container"),
-                            html.Hr(),
-                            html.Div(dash_table.DataTable(id="output-table"),id="combat-run-output"),
-                        ],className="d-grid gap-2 col-6 mx-auto"),
+                            ],className="d-grid gap-2 col-6 mx-auto"),
+                        html.Div(id="btn-container"),
+                        html.Hr(),
+                        html.Div(id="combat-run-output")
                     ]),
                     className="mt-3"
                 )
             ]),
             label="Setup & Run Combat",
-            tab_id="setup"
+            tab_id="setup_tab"
         ),
         dbc.Tab(
-            html.Div([
-                html.P(),
-                html.Div(id="plot-btn-container"),
-                html.Hr(),
-                dbc.Card(
-                    dbc.CardBody([
-                        # box plots
-                        dbc.Row([
-                            dbc.Col(dcc.Graph(id='raw-box')),
-                            dbc.Col(dcc.Graph(id='combat-box'))
-                        ])
-                    ])
-                ),
-                html.Hr(),
-                dbc.Card(
-                    dbc.CardBody([
-                        # scatter plots
-                        dbc.Row([
-                            dbc.Col(dcc.Graph(id='raw-scatter')),
-                            dbc.Col(dcc.Graph(id='combat-scatter'))
-                        ])
-                    ])
-                ),
-                html.Hr(),
-                dbc.Card(
-                    dbc.CardBody([
-                        # PCA
-                        dbc.Row([
-                            dbc.Col(dcc.Graph(id='raw-pca')),
-                            dbc.Col(dcc.Graph(id='combat-pca'))
-                        ])
-                    ])
-                ),
-                html.Hr(),
-                dbc.Card(
-                    dbc.CardBody([
-                        # clustergram
-                        dbc.Row([
-                            dbc.Col(dcc.Graph(id='raw-clustergram')),
-                            dbc.Col(dcc.Graph(id='combat-clustergram'))
-                        ])
-                    ])
-                ),
-                html.Hr(),
-                dbc.Card(
-                    dbc.CardBody([
-                        # distribution plots
-                        dbc.Row([
-                            dbc.Col(dcc.Graph(id='raw-distplot-norm')),
-                            dbc.Col(dcc.Graph(id='combat-distplot-norm'))
-                        ]),
-                        dbc.Row([
-                            dbc.Col(dcc.Graph(id='raw-distplot-kde')),
-                            dbc.Col(dcc.Graph(id='combat-distplot-kde'))
-                        ]),
-                        #dbc.Row([
-                        #    dbc.Col(dcc.Graph(id='combat-prior-dist'))
-                        #])
-                    ])
-                )
-            ]),
+            html.Div(id="plots",children=[]),
             label="Plots",
-            tab_id="plots"
+            tab_id="plots_tab"
         )
-    ],active_tab="setup"),
+    ],active_tab="setup_tab"),
     dmc.Text(id="txt"),
     dcc.Store(id="stored-data",storage_type="session"),
     dcc.Store(id="stored-combat",storage_type="memory"),
