@@ -6,6 +6,8 @@ ARG PATH="/usr/local/lib/R/site-library:${PATH}"
 
 COPY ./app.py /app.py
 COPY ./enigma.R /enigma.R
+COPY ./pages /pages
+COPY ./config.py /config.py
 
 RUN apt-get update
 RUN apt-get install -y software-properties-common \
@@ -46,7 +48,8 @@ RUN /usr/bin/python3.9 -m pip install dash_bio \
     statsmodels \
     nibabel \
     pyarrow \
-    dash_daq
+    dash_daq 
+#    scikit-fda
 
 RUN install2.r \
     BiocManager \

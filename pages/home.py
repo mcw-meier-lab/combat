@@ -4,7 +4,7 @@ from dash_extensions.enrich import html, dcc
 
 dash.register_page(
     __name__,
-    path='/home',
+    path='/',
     title='Data Harmonization Dashboard',
     name='Data Harmonization Dashboard'
 )

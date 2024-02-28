@@ -714,7 +714,8 @@ layout = html.Div([
                     className="mt-3"
                 )
             ]),
-            label="Setup & Run Combat"
+            label="Setup & Run Combat",
+            tab_id="setup"
         ),
         dbc.Tab(
             html.Div([
@@ -778,9 +779,10 @@ layout = html.Div([
                     ])
                 )
             ]),
-            label="Plots"
+            label="Plots",
+            tab_id="plots"
         )
-    ]),
+    ],active_tab="setup"),
     dmc.Text(id="txt"),
     dcc.Store(id="stored-data",storage_type="session"),
     dcc.Store(id="stored-combat",storage_type="memory"),
