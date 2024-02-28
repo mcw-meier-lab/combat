@@ -328,9 +328,46 @@ def gen_plots(selected_batch,selected_voi,selected_idvar,selected_timevar,long_d
                          facet_col=selected_timevar)
         scatter_figs.append(fig)
 
+    missing_data = False
+    for col in filtered_df.columns:
+        if any(pd.isnull(filtered_df[col])) and not all(pd.isnull(filtered_df[col])):
+            missing_data = True
+
+    if missing_data:
+        imputed_df = impute_data(filtered_df)
+
+    norm_figs = []
+    kde_figs = []
+    if missing_data:
+        for ii in range(len(timevars)):
+            for jj in range(len(groups)):
+                temp_df = imputed_df[imputed_df[selected_timevar] == timevars[ii]][imputed_df[selected_batch] == groups[jj]]
+
+                norm_plot = ff.create_distplot([temp_df[c] for c in selected_voi],selected_voi, curve_type='normal')
+                norm_plot.update_layout(title_text=f'Normal Distribution Plot (IMPUTED); {timevars[ii]}:{groups[jj]}')
+                norm_figs.append(norm_plot)
+
+                kde_plot = ff.create_distplot([temp_df[c] for c in selected_voi],selected_voi)
+                kde_plot.update_layout(title_text=f'KDE Distribution Plot (IMPUTED); {timevars[ii]}:{groups[jj]}')
+                kde_figs.append(kde_plot)
+    else:
+        for ii in range(len(timevars)):
+            for jj in range(len(groups)):
+                temp_df = filtered_df[filtered_df[selected_timevar] == timevars[ii]][filtered_df[selected_batch] == groups[jj]]
+
+                norm_plot = ff.create_distplot([temp_df[c] for c in selected_voi],selected_voi, curve_type='normal')
+                norm_plot.update_layout(title_text=f'Normal Distribution Plot; {timevars[ii]}:{groups[jj]}')
+                norm_figs.append(norm_plot)
+
+                kde_plot = ff.create_distplot([temp_df[c] for c in selected_voi],selected_voi)
+                kde_plot.update_layout(title_text=f'KDE Distribution Plot; {timevars[ii]}:{groups[jj]}')
+                kde_figs.append(kde_plot)
+
     if not combat_data:
         combat_box = go.Figure()
         combat_scatter = [go.Figure() for ff in range(len(selected_voi))]
+        combat_norm = [go.Figure() for ff in range(len(selected_voi))]
+        combat_kde = [go.Figure() for ff in range(len(selected_voi))]
     else:
         combat_box = make_subplots(rows=len(combat_voi),cols=1,subplot_titles=[c for c in combat_voi])
         for ii in range(len(combat_voi)):
@@ -348,6 +385,19 @@ def gen_plots(selected_batch,selected_voi,selected_idvar,selected_timevar,long_d
                          facet_col=selected_timevar)
             combat_scatter.append(fig)
 
+        combat_norm = []
+        combat_kde = []
+        for ii in range(len(timevars)):
+            for jj in range(len(groups)):
+                temp_df = combat_df[combat_df[selected_timevar] == timevars[ii]][combat_df[selected_batch] == groups[jj]]
+
+                norm_plot = ff.create_distplot([temp_df[c] for c in combat_voi],combat_voi, curve_type='normal')
+                norm_plot.update_layout(title_text=f'Combat Normal Distribution Plot; {timevars[ii]}:{groups[jj]}')
+                combat_norm.append(norm_plot)
+
+                kde_plot = ff.create_distplot([temp_df[c] for c in combat_voi],combat_voi)
+                kde_plot.update_layout(title_text=f'Combat KDE Distribution Plot; {timevars[ii]}:{groups[jj]}')
+                combat_kde.append(kde_plot)
 
     plots = html.Div([
         html.P(),
@@ -367,54 +417,30 @@ def gen_plots(selected_batch,selected_voi,selected_idvar,selected_timevar,long_d
                     dbc.Col(dcc.Graph(figure=combat_scatter[ii]))
                 ]) for ii in range(len(selected_voi))
             ])
+        ),
+        html.Hr(),
+        dbc.Card(
+            dbc.CardBody([
+                dbc.Row([
+                    dbc.Col(dcc.Graph(figure=norm_figs[ii])),
+                    dbc.Col(dcc.Graph(figure=combat_norm[ii]))
+                ]) for ii in range(len(selected_voi))
+            ])
+        ),
+        html.Hr(),
+        dbc.Card(
+            dbc.CardBody([
+                dbc.Row([
+                    dbc.Col(dcc.Graph(figure=kde_figs[ii])),
+                    dbc.Col(dcc.Graph(figure=combat_kde[ii]))
+                ]) for ii in range(len(selected_voi))
+            ])
         )
 
     ],id="plots")
 
     return plots
     
-#    missing_data = False
-#    for col in filtered_df.columns:
-#        if any(pd.isnull(filtered_df[col])) and not all(pd.isnull(filtered_df[col])):
-#            missing_data = True
-
-#    if missing_data:
-#        imputed_df = impute_data(filtered_df)
-
-    # distplots
-#    norm_figs = []
-#    kde_figs = []
-#    if missing_data:
-#        for ii in range(len(timevars)):
-#            for jj in range(len(groups)):
-#                temp_df = imputed_df[imputed_df[selected_timevar] == timevars[ii]][imputed_df[selected_batch] == groups[jj]]
-#
-#                norm_plot = ff.create_distplot([temp_df[c] for c in columns],columns, curve_type='normal')
-#                norm_plot.update_layout(title_text=f'Normal Distribution Plot (IMPUTED); {timevars[ii]}:{groups[jj]}')
-#                norm_figs.append(dcc.Graph(norm_plot))
-#                patched_children.append(dcc.Graph(norm_plot))
-
-#                kde_plot = ff.create_distplot([temp_df[c] for c in columns],columns)
-#                kde_plot.update_layout(title_text=f'KDE Distribution Plot (IMPUTED); {timevars[ii]}:{groups[jj]}')
-#                kde_figs.append(dcc.Graph(kde_plot))
-#                #patched_children.append(dcc.Graph(kde_plot))
-#    else:
-#        for ii in range(len(timevars)):
-#            for jj in range(len(groups)):
-#                temp_df = filtered_df[filtered_df[selected_timevar] == timevars[ii]][filtered_df[selected_batch] == groups[jj]]
-#
-#                norm_plot = ff.create_distplot([temp_df[c] for c in columns],columns, curve_type='normal')
-#                norm_plot.update_layout(title_text=f'Normal Distribution Plot; {timevars[ii]}:{groups[jj]}')
-#                norm_figs.append(dcc.Graph(norm_plot))
-                #patched_children.append(dcc.Graph(norm_plot))
-
-#                kde_plot = ff.create_distplot([temp_df[c] for c in columns],columns)
-#                kde_plot.update_layout(title_text=f'KDE Distribution Plot; {timevars[ii]}:{groups[jj]}')
-#                kde_figs.append(dcc.Graph(kde_plot))
-                #patched_children.append(dcc.Graph(kde_plot))
-
-#    return patched_children, box_figs, norm_figs, kde_figs
-    return box_fig
 
 layout = html.Div([
     html.P(),
@@ -504,39 +530,6 @@ layout = html.Div([
             tab_id="setup_tab"
         ),
         dbc.Tab(html.Div(id="plots",children=[]),
-#            html.Div([
-#                html.P(),
-#                dbc.Card(
-#                    dbc.CardBody([
-#                        dbc.Row([
-#                            dbc.Col(dcc.Graph(id='raw-box-long')),
-#                            dbc.Col(html.Div(id="combat-box-long"))
-#                        ])
-#                    ])
-#                ),
-#                html.Hr(),
-#                dbc.Card(
-#                    dbc.CardBody([
-#                        dbc.Row([
-#                            dbc.Col(dcc.Graph(id='raw-scatter-long')),
-#                            dbc.Col(html.Div(id="combat-scatter-long"))
-#                        ])
-#                    ])
-#                ),
-#                html.Hr(),
-#                dbc.Card(
-#                    dbc.CardBody([
-#                        dbc.Row([
-#                            dbc.Col(html.Div(id="raw-distplot-norm-long")),
-#                            dbc.Col(html.Div(id="combat-distplot-norm-long"))
-#                        ]),
-#                        dbc.Row([
-#                            dbc.Col(html.Div(id="raw-distplot-kde-long")),
-#                            dbc.Col(html.Div(id="combat-distplot-kde-long"))
-#                        ])
-#                    ])
-#                )
-#            ]), 
             label="Plots",
             tab_id="plots_tab"
         ), 
