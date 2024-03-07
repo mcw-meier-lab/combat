@@ -11,7 +11,7 @@ import io
 import json
 import base64
 import pandas as pd
-#import seaborn as sns
+import numpy as np
 import rpy2
 from rpy2.robjects.packages import importr
 from rpy2 import robjects as ro
@@ -460,43 +460,105 @@ def gen_plots(selected_batch,selected_voi,selected_idvar,selected_timevar,long_d
 
     return plots
 
-#@callback(
-#    Output("traj","children"),
-#    Input("dropdown-long-batch","value"),
-#    [Input("dropdown-long-voi","value")],
-#    Input("dropdown-long-idvar","value"),
-#    Input("dropdown-long-timevar","value"),
-#    Input("stored-long-data","data"),
-#    Input("stored-long-combat","data")
-#)
-#def gen_trajectories(selected_batch,selected_voi,selected_idvar,selected_timevar,long_data,combat_data):
-#    if selected_batch is None or selected_voi is None or selected_idvar is None or selected_timevar is None or long_data is None:
-#        raise PreventUpdate
-#
-#    long_df = pd.read_json(io.StringIO(long_data), orient='split')
-#    filtered_df = long_df[selected_voi].apply(pd.to_numeric)
-#    filtered_df[selected_batch] = long_df[selected_batch]
-#    filtered_df[selected_idvar] = long_df[selected_idvar]
-#    filtered_df[selected_timevar] = long_df[selected_timevar]
-#
-#    missing_data = False
-#    for col in filtered_df.columns:
-#        if any(pd.isnull(filtered_df[col])) and not all(pd.isnull(filtered_df[col])):
-#            missing_data = True
-#
-#    avg_df = pd.DataFrame(filtered_df.groupby([selected_idvar,selected_batch,selected_timevar])[selected_voi].mean()).reset_index()
-#
-#    traj_plots = []
-#    for voi in range(len(selected_voi)):
-#        traj = sns.catplot(kind='point',
-#           data=avg_df,
-#           x=selected_timevar,
-#           y=selected_voi[voi],
-#           hue=selected_batch
-#        )
-        
+@callback(
+    Output("traj","children"),
+    Input("dropdown-long-batch","value"),
+    [Input("dropdown-long-voi","value")],
+    Input("dropdown-long-idvar","value"),
+    Input("dropdown-long-timevar","value"),
+    Input("stored-long-data","data"),
+    Input("stored-long-combat","data")
+)
+def gen_trajectories(selected_batch,selected_voi,selected_idvar,selected_timevar,long_data,combat_data):
+    if selected_batch is None or selected_voi is None or selected_idvar is None or selected_timevar is None or long_data is None:
+        raise PreventUpdate
+
+    long_df = pd.read_json(io.StringIO(long_data), orient='split')
+    filtered_df = long_df[selected_voi].apply(pd.to_numeric)
+    filtered_df[selected_batch] = long_df[selected_batch]
+    filtered_df[selected_idvar] = long_df[selected_idvar]
+    filtered_df[selected_timevar] = long_df[selected_timevar]
+
+    missing_data = False
+    for col in filtered_df.columns:
+        if any(pd.isnull(filtered_df[col])) and not all(pd.isnull(filtered_df[col])):
+            missing_data = True
+
+    avg_df = pd.DataFrame(filtered_df.groupby([selected_idvar,selected_batch,selected_timevar])[selected_voi].mean()).reset_index()
+    groups = list(avg_df[selected_batch].unique())
+
+    traj_plots = []
+    for voi in range(len(selected_voi)):
+        grouped = avg_df[[selected_batch,selected_timevar,selected_voi[voi]]].groupby([selected_batch,selected_timevar]).agg(["mean","std","count"])
+        grouped = grouped.droplevel(axis=1,level=0).reset_index()
+        grouped["ci"] = 1.96 * grouped["std"] / np.sqrt(grouped["count"])
+        grouped["ci_lower"] = grouped["mean"] - grouped["ci"]
+        grouped["ci_upper"] = grouped["mean"] + grouped["ci"]
+
+        traj = go.Figure()
+        for g in groups:
+            traj.add_trace(go.Scatter(
+                name=g,
+                x=grouped[grouped[selected_batch]==g][selected_timevar],
+                y=grouped[grouped[selected_batch]==g]["mean"],
+                mode="lines",
+                error_y=dict(
+                    type="percent",
+                    symmetric=False,
+                    array=grouped[grouped[selected_batch]==g]["ci_upper"],
+                    arrayminus=grouped[grouped[selected_batch]==g]["ci_lower"]
+                )
+            ))
+        traj.update_layout(title=f"{selected_voi[voi]}")
+        traj_plots.append(traj)
+
+    if combat_data:
+        combat_df = pd.read_json(io.StringIO(combat_data),orient='split')
+        combat_voi = [f"{c}.combat" for c in selected_voi]
+        combat_avg = pd.DataFrame(combat_df.groupby([selected_idvar,selected_batch,selected_timevar])[combat_voi].mean()).reset_index()
+
+    if not combat_data:
+        combat_traj = [go.Figure() for voi in range(len(selected_voi))]
+    else:
+        combat_traj = []
+        for voi in range(len(combat_voi)):
+            grouped = combat_avg[[selected_batch,selected_timevar,combat_voi[voi]]].groupby([selected_batch,selected_timevar]).agg(["mean","std","count"])
+            grouped = grouped.droplevel(axis=1,level=0).reset_index()
+            grouped["ci"] = 1.96 * grouped["std"] / np.sqrt(grouped["count"])
+            grouped["ci_lower"] = grouped["mean"] - grouped["ci"]
+            grouped["ci_upper"] = grouped["mean"] + grouped["ci"]
+
+            traj = go.Figure()
+            for g in groups:
+                traj.add_trace(go.Scatter(
+                    name=g,
+                    x=grouped[grouped[selected_batch]==g][selected_timevar],
+                    y=grouped[grouped[selected_batch]==g]["mean"],
+                    mode="lines",
+                    error_y=dict(
+                        type="percent",
+                        symmetric=False,
+                        array=grouped[grouped[selected_batch]==g]["ci_upper"],
+                        arrayminus=grouped[grouped[selected_batch]==g]["ci_lower"]
+                    )
+                ))
+            traj.update_layout(title=f"{selected_voi[voi]} Combat Adjusted")
+            combat_traj.append(traj)
+
+
+    plots = html.Div([
+        html.P(),
+        dbc.Card(
+            dbc.CardBody([
+                dbc.Row([
+                    dbc.Col(dcc.Graph(figure=traj_plots[ii])),
+                    dbc.Col(dcc.Graph(figure=combat_traj[ii]))
+                ]) for ii in range(len(selected_voi))
+            ])
+        ), 
+    ],id="traj")
     
-#    return
+    return plots
 
 layout = html.Div([
     html.P(),
@@ -589,10 +651,10 @@ layout = html.Div([
             label="Plots",
             tab_id="plots_tab"
         ),
-#        dbc.Tab(html.Div(id="traj",children=[]),
-#            label="Trajectories",
-#            tab_id="traj_tab"
-#        )
+        dbc.Tab(html.Div(id="traj",children=[]),
+            label="Trajectories",
+            tab_id="traj_tab"
+        )
     ],
     active_tab="setup_tab"),
     dmc.Text(id="long-txt"),
