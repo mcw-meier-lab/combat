@@ -11,7 +11,7 @@ import io
 import json
 import base64
 import pandas as pd
-import seaborn as sns
+#import seaborn as sns
 import rpy2
 from rpy2.robjects.packages import importr
 from rpy2 import robjects as ro
