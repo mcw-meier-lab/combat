@@ -50,7 +50,6 @@ RUN /usr/bin/python3.9 -m pip install dash_bio \
     pyarrow \
     dash_daq \
     dash-iconify
-#    scikit-fda
 
 RUN install2.r \
     BiocManager \

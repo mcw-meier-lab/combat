@@ -5,26 +5,25 @@ from dash_extensions.enrich import (
     callback, Output, Input, State,
     dcc, html, dash_table, DashLogger, ctx, ALL
 )
-from dash import Patch
 from dash.exceptions import PreventUpdate
 
 import io
 import json
 import base64
 import pandas as pd
+import seaborn as sns
 import rpy2
 from rpy2.robjects.packages import importr
 from rpy2 import robjects as ro
 from rpy2.robjects import pandas2ri
 from formulaic import Formula
-from itertools import combinations
 import warnings
 warnings.filterwarnings("ignore",category=UserWarning)
 
 import plotly.express as px
 import plotly.figure_factory as ff
 import plotly.graph_objects as go
-from plotly.subplots import make_subplots
+from sklearn.decomposition import PCA
 
 from config import impute_data
 
@@ -306,105 +305,116 @@ def gen_plots(selected_batch,selected_voi,selected_idvar,selected_timevar,long_d
     filtered_df[selected_idvar] = long_df[selected_idvar]
     filtered_df[selected_timevar] = long_df[selected_timevar]
 
-    timevars = list(long_df[selected_timevar].unique())
-    groups = list(long_df[selected_batch].unique())
-
-    if combat_data:
-        combat_df = pd.read_json(io.StringIO(combat_data),orient='split')
-        combat_voi = [f"{c}.combat" for c in selected_voi]
-
-    box_fig = make_subplots(rows=len(selected_voi),cols=1,subplot_titles=[c for c in selected_voi])
-    for ii in range(len(selected_voi)):
-        for t in px.box(filtered_df,x=filtered_df[selected_timevar],
-                        y=filtered_df[selected_voi[ii]],color=selected_batch,points='all').data:
-            box_fig.add_trace(t,row=ii+1,col=1)
-
-    box_fig.update_layout(boxmode='group',margin={"l":0,"r":0,"t":20,"b":0}).update_traces(showlegend=False,selector=lambda t: selected_voi[0] not in t.hovertemplate)
-
-    scatter_figs = []
-    for ii in list(combinations(range(len(selected_voi)),2)):
-        fig = px.scatter(filtered_df,x=selected_voi[ii[0]],
-                         y=selected_voi[ii[1]],color=selected_batch,
-                         facet_col=selected_timevar)
-        scatter_figs.append(fig)
-
     missing_data = False
     for col in filtered_df.columns:
         if any(pd.isnull(filtered_df[col])) and not all(pd.isnull(filtered_df[col])):
             missing_data = True
 
+    avg_df = pd.DataFrame(filtered_df.groupby([selected_idvar,selected_batch,selected_timevar])[selected_voi].mean()).reset_index()
+    groups = list(avg_df[selected_batch].unique())
+
+    box_plot = px.box(avg_df[selected_voi + [selected_batch]],color=selected_batch,points="all")
+    box_plot.update_layout(title_text="Box Plots")
+
+    scatter_plot = px.scatter_matrix(
+        avg_df,
+        dimensions=selected_voi,
+        color=selected_batch
+    )
+    scatter_plot.update_traces(diagonal_visible=False)
+    scatter_plot.update_layout(title_text='Matrix Scatter Plot')
+
     if missing_data:
-        imputed_df = impute_data(filtered_df)
+        imputed_df = impute_data(filtered_df) 
+        avg_df = pd.DataFrame(imputed_df.groupby([selected_idvar,selected_batch,selected_timevar])[selected_voi].mean()).reset_index()
 
-    norm_figs = []
-    kde_figs = []
-    if missing_data:
-        for ii in range(len(timevars)):
-            for jj in range(len(groups)):
-                temp_df = imputed_df[imputed_df[selected_timevar] == timevars[ii]][imputed_df[selected_batch] == groups[jj]]
+    pca = PCA()
+    components = pca.fit_transform(avg_df[selected_voi])
+    labels = {
+        str(i): f"PC {i+1} ({var:.1f}%)"
+        for i, var in enumerate(pca.explained_variance_ratio_ * 100)
+    }
 
-                norm_plot = ff.create_distplot([temp_df[c] for c in selected_voi],selected_voi, curve_type='normal')
-                norm_plot.update_layout(title_text=f'Normal Distribution Plot (IMPUTED); {timevars[ii]}:{groups[jj]}')
-                norm_figs.append(norm_plot)
+    pca_plot = px.scatter_matrix(
+        components,
+        labels=labels,
+        dimensions=range(len(selected_voi)),
+        color=avg_df[selected_batch]
+    )
+    pca_plot.update_traces(diagonal_visible=False)
+    pca_plot.update_layout(title_text='PCA')
 
-                kde_plot = ff.create_distplot([temp_df[c] for c in selected_voi],selected_voi)
-                kde_plot.update_layout(title_text=f'KDE Distribution Plot (IMPUTED); {timevars[ii]}:{groups[jj]}')
-                kde_figs.append(kde_plot)
-    else:
-        for ii in range(len(timevars)):
-            for jj in range(len(groups)):
-                temp_df = filtered_df[filtered_df[selected_timevar] == timevars[ii]][filtered_df[selected_batch] == groups[jj]]
+    # distplots
+    norm_plots = []
+    kde_plots = []
+    for voi in range(len(selected_voi)):
+        norm = ff.create_distplot(
+            [avg_df[avg_df[selected_batch] == g][selected_voi[voi]] for g in groups],
+            groups,curve_type='normal')
+        norm.update_layout(title_text=f'{selected_voi[voi]} Normal Distribution Plot')
+        norm_plots.append(norm)
 
-                norm_plot = ff.create_distplot([temp_df[c] for c in selected_voi],selected_voi, curve_type='normal')
-                norm_plot.update_layout(title_text=f'Normal Distribution Plot; {timevars[ii]}:{groups[jj]}')
-                norm_figs.append(norm_plot)
+        kde = ff.create_distplot(
+            [avg_df[avg_df[selected_batch] == g][selected_voi[voi]] for g in groups],groups)
+        kde.update_layout(title_text=f'{selected_voi[voi]} KDE Distribution Plot')
+        kde_plots.append(kde)
 
-                kde_plot = ff.create_distplot([temp_df[c] for c in selected_voi],selected_voi)
-                kde_plot.update_layout(title_text=f'KDE Distribution Plot; {timevars[ii]}:{groups[jj]}')
-                kde_figs.append(kde_plot)
+
+    if combat_data:
+        combat_df = pd.read_json(io.StringIO(combat_data),orient='split')
+        combat_voi = [f"{c}.combat" for c in selected_voi]
+        combat_avg = pd.DataFrame(combat_df.groupby([selected_idvar,selected_batch,selected_timevar])[combat_voi].mean()).reset_index()
 
     if not combat_data:
         combat_box = go.Figure()
-        combat_scatter = [go.Figure() for ff in range(len(selected_voi))]
-        combat_norm = [go.Figure() for ff in range(len(selected_voi))]
-        combat_kde = [go.Figure() for ff in range(len(selected_voi))]
+        combat_scatter = go.Figure()
+        combat_pca = go.Figure()
+        combat_norms = [go.Figure() for voi in range(len(selected_voi))]
+        combat_kdes = [go.Figure() for voi in range(len(selected_voi))]
     else:
-        combat_box = make_subplots(rows=len(combat_voi),cols=1,subplot_titles=[c for c in combat_voi])
-        for ii in range(len(combat_voi)):
-            for t in px.box(combat_df,x=combat_df[selected_timevar],
-                            y=combat_df[combat_voi[ii]],color=selected_batch,
-                            points='all').data:
-                combat_box.add_trace(t,row=ii+1,col=1)
+        combat_box = px.box(combat_avg[combat_voi + [selected_batch]],color=selected_batch,points="all")
+        combat_box.update_layout(title_text="Combat Adjusted Box Plot")
 
-        combat_box.update_layout(boxmode="group",margin={"l":0,"r":0,"t":20,"b":0}).update_traces(showlegend=False,selector=lambda t: combat_voi[0] not in t.hovertemplate)
+        combat_scatter = px.scatter_matrix(
+            combat_avg,dimensions=combat_voi,color=selected_batch
+        )
+        combat_scatter.update_traces(diagonal_visible=False)
+        combat_scatter.update_layout(title_text="Combat Adjusted Matrix Scatter Plot")
 
-        combat_scatter = []
-        for ii in list(combinations(range(len(selected_voi)),2)):
-            fig = px.scatter(combat_df,x=combat_voi[ii[0]],
-                         y=combat_voi[ii[1]],color=selected_batch,
-                         facet_col=selected_timevar)
-            combat_scatter.append(fig)
+        components = pca.fit_transform(combat_avg[combat_voi])
+        labels = {
+            str(i): f"PC {i+1} ({var:.1f}%)"
+            for i, var in enumerate(pca.explained_variance_ratio_ * 100)
+        }
 
-        combat_norm = []
-        combat_kde = []
-        for ii in range(len(timevars)):
-            for jj in range(len(groups)):
-                temp_df = combat_df[combat_df[selected_timevar] == timevars[ii]][combat_df[selected_batch] == groups[jj]]
+        combat_pca = px.scatter_matrix(
+            components,
+            labels=labels,
+            dimensions=range(len(combat_voi)),
+            color=combat_avg[selected_batch]
+        )
+        combat_pca.update_traces(diagonal_visible=False)
+        combat_pca.update_layout(title_text='Combat Adjusted PCA')
 
-                norm_plot = ff.create_distplot([temp_df[c] for c in combat_voi],combat_voi, curve_type='normal')
-                norm_plot.update_layout(title_text=f'Combat Normal Distribution Plot; {timevars[ii]}:{groups[jj]}')
-                combat_norm.append(norm_plot)
+        combat_norms = []
+        combat_kdes = []
+        for voi in range(len(combat_voi)):
+            c_norm = ff.create_distplot(
+                [combat_avg[combat_avg[selected_batch] == g][combat_voi[voi]] for g in groups],groups, curve_type='normal')
+            c_norm.update_layout(title_text=f'{combat_voi[voi]} Combat Adjusted Normal Distribution Plot')
+            combat_norms.append(c_norm)
 
-                kde_plot = ff.create_distplot([temp_df[c] for c in combat_voi],combat_voi)
-                kde_plot.update_layout(title_text=f'Combat KDE Distribution Plot; {timevars[ii]}:{groups[jj]}')
-                combat_kde.append(kde_plot)
+            c_kde = ff.create_distplot([combat_avg[combat_avg[selected_batch] == g][combat_voi[voi]] for g in groups],groups)
+            c_kde.update_layout(title_text=f'{combat_voi[voi]} Combat Adjusted KDE Distribution Plot')
+            combat_kdes.append(c_kde)
+
 
     plots = html.Div([
         html.P(),
         dbc.Card(
             dbc.CardBody([
                 dbc.Row([
-                    dbc.Col(dcc.Graph(figure=box_fig)),
+                    dbc.Col(dcc.Graph(figure=box_plot)),
                     dbc.Col(dcc.Graph(figure=combat_box))
                 ])
             ])
@@ -413,8 +423,26 @@ def gen_plots(selected_batch,selected_voi,selected_idvar,selected_timevar,long_d
         dbc.Card(
             dbc.CardBody([
                 dbc.Row([
-                    dbc.Col(dcc.Graph(figure=scatter_figs[ii])),
-                    dbc.Col(dcc.Graph(figure=combat_scatter[ii]))
+                    dbc.Col(dcc.Graph(figure=scatter_plot)),
+                    dbc.Col(dcc.Graph(figure=combat_scatter))
+                ])
+            ])
+        ),
+        html.Hr(),
+        dbc.Card(
+            dbc.CardBody([
+                dbc.Row([
+                    dbc.Col(dcc.Graph(figure=pca_plot)),
+                    dbc.Col(dcc.Graph(figure=combat_pca))
+                ])
+            ])
+        ),
+        html.Hr(),
+        dbc.Card(
+            dbc.CardBody([
+                dbc.Row([
+                    dbc.Col(dcc.Graph(figure=norm_plots[ii])),
+                    dbc.Col(dcc.Graph(figure=combat_norms[ii]))
                 ]) for ii in range(len(selected_voi))
             ])
         ),
@@ -422,17 +450,8 @@ def gen_plots(selected_batch,selected_voi,selected_idvar,selected_timevar,long_d
         dbc.Card(
             dbc.CardBody([
                 dbc.Row([
-                    dbc.Col(dcc.Graph(figure=norm_figs[ii])),
-                    dbc.Col(dcc.Graph(figure=combat_norm[ii]))
-                ]) for ii in range(len(selected_voi))
-            ])
-        ),
-        html.Hr(),
-        dbc.Card(
-            dbc.CardBody([
-                dbc.Row([
-                    dbc.Col(dcc.Graph(figure=kde_figs[ii])),
-                    dbc.Col(dcc.Graph(figure=combat_kde[ii]))
+                    dbc.Col(dcc.Graph(figure=kde_plots[ii])),
+                    dbc.Col(dcc.Graph(figure=combat_kdes[ii]))
                 ]) for ii in range(len(selected_voi))
             ])
         )
@@ -440,7 +459,44 @@ def gen_plots(selected_batch,selected_voi,selected_idvar,selected_timevar,long_d
     ],id="plots")
 
     return plots
+
+#@callback(
+#    Output("traj","children"),
+#    Input("dropdown-long-batch","value"),
+#    [Input("dropdown-long-voi","value")],
+#    Input("dropdown-long-idvar","value"),
+#    Input("dropdown-long-timevar","value"),
+#    Input("stored-long-data","data"),
+#    Input("stored-long-combat","data")
+#)
+#def gen_trajectories(selected_batch,selected_voi,selected_idvar,selected_timevar,long_data,combat_data):
+#    if selected_batch is None or selected_voi is None or selected_idvar is None or selected_timevar is None or long_data is None:
+#        raise PreventUpdate
+#
+#    long_df = pd.read_json(io.StringIO(long_data), orient='split')
+#    filtered_df = long_df[selected_voi].apply(pd.to_numeric)
+#    filtered_df[selected_batch] = long_df[selected_batch]
+#    filtered_df[selected_idvar] = long_df[selected_idvar]
+#    filtered_df[selected_timevar] = long_df[selected_timevar]
+#
+#    missing_data = False
+#    for col in filtered_df.columns:
+#        if any(pd.isnull(filtered_df[col])) and not all(pd.isnull(filtered_df[col])):
+#            missing_data = True
+#
+#    avg_df = pd.DataFrame(filtered_df.groupby([selected_idvar,selected_batch,selected_timevar])[selected_voi].mean()).reset_index()
+#
+#    traj_plots = []
+#    for voi in range(len(selected_voi)):
+#        traj = sns.catplot(kind='point',
+#           data=avg_df,
+#           x=selected_timevar,
+#           y=selected_voi[voi],
+#           hue=selected_batch
+#        )
+        
     
+#    return
 
 layout = html.Div([
     html.P(),
@@ -532,7 +588,11 @@ layout = html.Div([
         dbc.Tab(html.Div(id="plots",children=[]),
             label="Plots",
             tab_id="plots_tab"
-        ), 
+        ),
+#        dbc.Tab(html.Div(id="traj",children=[]),
+#            label="Trajectories",
+#            tab_id="traj_tab"
+#        )
     ],
     active_tab="setup_tab"),
     dmc.Text(id="long-txt"),

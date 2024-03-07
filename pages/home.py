@@ -26,14 +26,6 @@ layout = html.Div([
     dbc.Card(
         dbc.CardBody([
             html.H3("Instructions for use: "),
-            html.P(
-                "If you know what version of Combat you'd like to run, "
-                "choose the appropriate page from the menu to get started. "
-                "Otherwise you can choose to 'Compare Combat' page to "
-                "explore your options. "
-                "Regardless of the version you choose, the following steps "
-                "will apply: "
-            ),
             dcc.Markdown('''
                 * Upload your data (preferrably in CSV format)
                 * Choose your variables:
